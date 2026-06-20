@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Ignore local database states
+data/warehouse.duckdb
+# Optional: If you want to keep the config directory structure on GitHub 
+# but hide your actual secrets, ignore the real yaml file and keep a template:
+config/config.yaml

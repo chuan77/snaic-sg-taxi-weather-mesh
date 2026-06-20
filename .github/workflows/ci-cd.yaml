@@ -1,0 +1,50 @@
+# .github/workflows/ci-cd.yaml
+name: SG Transit-Weather Mesh CI Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  pipeline-quality-check:
+    name: Code Quality and Matrix Verification
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 1. Check out the project code from the repository
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
+
+    # 2. Spin up an isolated Python runtime container
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip' # Speeds up subsequent runs by caching package layers
+
+    # 3. Provision a dummy config file for the headless testing worker
+    - name: Provision Test Environment Configuration
+      run: |
+        mkdir -p config
+        cat <<EOF > config/config.yaml
+        api:
+          key: "v2:mock_key_for_ci_pipeline_runs_only_not_for_prod"
+          base_url: "https://data.gov.sg"
+        orchestration:
+          poll_cron_schedule: "*/5 * * * *"
+        EOF
+
+    # 4. Install pipeline packaging components and dependencies
+    - name: Install System Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest requests-mock
+        pip install -e .
+
+    # 5. Execute code layout parsing tests
+    - name: Run Pytest Validation Matrix
+      run: |
+        pytest -v
+
