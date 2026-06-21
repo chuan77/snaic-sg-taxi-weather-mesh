@@ -9,6 +9,7 @@ from dagster import asset, Output, AssetIn
 _PROJECT_ROOT  = Path(__file__).parent.parent.parent
 _NOWCAST_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "nowcast.json"
 _HOTSPOTS_JSON = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "hotspots.json"
+_TAXIS_JSON    = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis.json"
 
 # NEA official forecast string → WeatherIntensity level used by the frontend
 FORECAST_INTENSITY: dict[str, str] = {
@@ -403,3 +404,42 @@ def hotspots_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
             "hotspots_path":  str(_HOTSPOTS_JSON),
         },
     )
+
+
+@asset(
+    ins={
+        "ingest_sg_raw_data":          AssetIn(),
+        "analytics_taxi_weather_mart": AssetIn(),
+    },
+    compute_kind="duckdb",
+)
+def taxis_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
+    """Exports the latest taxi availability snapshot as taxis.json for the React map overlay."""
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        rows = conn.execute("""
+            SELECT latitude, longitude
+            FROM raw.taxi_availability
+            WHERE timestamp = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+        """).fetchall()
+        snapshot_ts = conn.execute(
+            "SELECT MAX(timestamp) FROM raw.taxi_availability"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    taxis = [
+        {"lat": round(float(r[0]), 4), "lng": round(float(r[1]), 4)}
+        for r in rows if r[0] and r[1]
+    ]
+
+    payload = {
+        "updated_at":         datetime.now().astimezone().isoformat(),
+        "snapshot_timestamp": str(snapshot_ts) if snapshot_ts else "",
+        "total":              len(taxis),
+        "taxis":              taxis,
+    }
+    _TAXIS_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _TAXIS_JSON.write_text(json.dumps(payload, separators=(",", ":")))
+
+    return Output(value=None, metadata={"taxi_count": len(taxis), "taxis_path": str(_TAXIS_JSON)})

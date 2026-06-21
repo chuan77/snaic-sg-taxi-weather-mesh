@@ -1,9 +1,3 @@
-const STATUS_ROWS = [
-  { color: '#22c55e', glow: 'rgba(34,197,94,0.6)',   label: 'Available'  },
-  { color: '#eab308', glow: 'rgba(234,179,8,0.6)',   label: 'Hired'      },
-  { color: '#3b82f6', glow: 'rgba(59,130,246,0.6)',  label: 'Pre-booked' },
-];
-
 function CarIcon({ color }: { color: string }) {
   return (
     <svg width="22" height="14" viewBox="0 0 22 15" xmlns="http://www.w3.org/2000/svg">
@@ -33,19 +27,36 @@ export default function StatusKey() {
         Taxi Status
       </h3>
       <div className="flex flex-col gap-2">
-        {STATUS_ROWS.map(({ color, glow, label }) => (
-          <div key={label} className="flex items-center gap-2">
-            <div style={{ filter: `drop-shadow(0 0 4px ${glow})` }}>
-              <CarIcon color={color} />
-            </div>
-            <span
-              className="font-semibold tracking-wide"
-              style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)' }}
-            >
-              {label}
-            </span>
+        <div className="flex items-center gap-2">
+          <div style={{ filter: 'drop-shadow(0 0 4px rgba(34,197,94,0.6))' }}>
+            <CarIcon color="#22c55e" />
           </div>
-        ))}
+          <span className="font-semibold tracking-wide" style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)' }}>
+            Available
+          </span>
+        </div>
+        <div className="flex items-center gap-2 opacity-35">
+          <div>
+            <CarIcon color="#eab308" />
+          </div>
+          <span className="font-semibold tracking-wide" style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)' }}>
+            Hired
+          </span>
+        </div>
+        <div className="flex items-center gap-2 opacity-35">
+          <div>
+            <CarIcon color="#3b82f6" />
+          </div>
+          <span className="font-semibold tracking-wide" style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)' }}>
+            Pre-booked
+          </span>
+        </div>
+        <div
+          className="mt-1 pt-1.5"
+          style={{ borderTop: '1px solid rgba(255,255,255,0.08)', fontSize: 8, color: 'rgba(255,255,255,0.3)', lineHeight: 1.4 }}
+        >
+          Live data: available only.<br />Hired/pre-booked not in API.
+        </div>
       </div>
     </div>
   );

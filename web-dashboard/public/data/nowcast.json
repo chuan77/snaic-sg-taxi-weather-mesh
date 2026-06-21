@@ -1,16 +1,16 @@
 {
-  "updated_at": "2026-06-21 14:06:27+08:00",
+  "updated_at": "2026-06-21 14:36:38+08:00",
   "valid_period": {
-    "start": "2026-06-21 14:00:00+08:00",
-    "end": "2026-06-21 16:00:00+08:00",
-    "text": "2.00 pm to 4.00 pm"
+    "start": "2026-06-21 14:30:00+08:00",
+    "end": "2026-06-21 16:30:00+08:00",
+    "text": "2.30 pm to 4.30 pm"
   },
   "alert": {
-    "active": false,
-    "message": "Showers across parts of Singapore. Monitor conditions."
+    "active": true,
+    "message": "Thunderstorms in North Singapore. High demand alert."
   },
   "regions": {
-    "North": "moderate",
+    "North": "storm",
     "South": "drizzle",
     "East": "moderate",
     "West": "drizzle",
@@ -188,8 +188,8 @@
     {
       "name": "Mandai",
       "region": "North",
-      "forecast": "Showers",
-      "intensity": "moderate",
+      "forecast": "Cloudy",
+      "intensity": "drizzle",
       "latitude": 1.419,
       "longitude": 103.812
     },
@@ -252,8 +252,8 @@
     {
       "name": "Punggol",
       "region": "North",
-      "forecast": "Showers",
-      "intensity": "moderate",
+      "forecast": "Thundery Showers",
+      "intensity": "storm",
       "latitude": 1.401,
       "longitude": 103.904
     },
@@ -268,24 +268,24 @@
     {
       "name": "Seletar",
       "region": "North",
-      "forecast": "Showers",
-      "intensity": "moderate",
+      "forecast": "Thundery Showers",
+      "intensity": "storm",
       "latitude": 1.404,
       "longitude": 103.869
     },
     {
       "name": "Sembawang",
       "region": "North",
-      "forecast": "Showers",
-      "intensity": "moderate",
+      "forecast": "Thundery Showers",
+      "intensity": "storm",
       "latitude": 1.445,
       "longitude": 103.818495
     },
     {
       "name": "Sengkang",
       "region": "North",
-      "forecast": "Cloudy",
-      "intensity": "drizzle",
+      "forecast": "Thundery Showers",
+      "intensity": "storm",
       "latitude": 1.384,
       "longitude": 103.891443
     },
@@ -380,35 +380,35 @@
     {
       "name": "Woodlands",
       "region": "North",
-      "forecast": "Showers",
-      "intensity": "moderate",
+      "forecast": "Cloudy",
+      "intensity": "drizzle",
       "latitude": 1.432,
       "longitude": 103.786528
     },
     {
       "name": "Yishun",
       "region": "North",
-      "forecast": "Showers",
-      "intensity": "moderate",
+      "forecast": "Thundery Showers",
+      "intensity": "storm",
       "latitude": 1.418,
       "longitude": 103.839
     }
   ],
   "timeline": [
     {
-      "time": "2:00 PM",
-      "label": "Showers",
-      "intensity": "moderate"
+      "time": "2:30 PM",
+      "label": "Thunderstorm",
+      "intensity": "storm"
     },
     {
-      "time": "3:00 PM",
-      "label": "Showers",
-      "intensity": "moderate"
+      "time": "3:30 PM",
+      "label": "Thunderstorm",
+      "intensity": "storm"
     },
     {
-      "time": "4:00 PM",
-      "label": "Showers",
-      "intensity": "moderate"
+      "time": "4:30 PM",
+      "label": "Thunderstorm",
+      "intensity": "storm"
     }
   ]
 }

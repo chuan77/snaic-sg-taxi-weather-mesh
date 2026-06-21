@@ -41,6 +41,18 @@ export interface HotspotsData {
   hotspots: HotspotEntry[];
 }
 
+export interface TaxiPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface TaxisData {
+  updated_at: string;
+  snapshot_timestamp: string;
+  total: number;
+  taxis: TaxiPoint[];
+}
+
 export interface NowcastStep {
   time: string;
   label: string;

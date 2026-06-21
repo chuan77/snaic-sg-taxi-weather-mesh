@@ -1,8 +1,8 @@
 import { MapContainer, TileLayer } from 'react-leaflet';
 import WeatherMesh from './WeatherMesh';
-import TaxiMarkers from './TaxiMarkers';
+import TaxiDotLayer from './TaxiDotLayer';
 import { PrecipitationOverlay } from './PrecipitationOverlay';
-import type { NowcastArea } from '../types';
+import type { NowcastArea, TaxiPoint } from '../types';
 
 const DARK_TILES =
   'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -12,9 +12,10 @@ const ATTRIBUTION =
 
 interface Props {
   areas?: NowcastArea[];
+  taxis?: TaxiPoint[];
 }
 
-export default function MapLayer({ areas = [] }: Props) {
+export default function MapLayer({ areas = [], taxis = [] }: Props) {
   return (
     <MapContainer
       center={[1.352, 103.819]}
@@ -27,13 +28,14 @@ export default function MapLayer({ areas = [] }: Props) {
     >
       <TileLayer url={DARK_TILES} attribution={ATTRIBUTION} subdomains="abcd" maxZoom={20} />
 
-      {/* Gradient precipitation blobs — in Leaflet overlayPane, below taxi markers */}
+      {/* Gradient precipitation blobs — below taxi dots */}
       <PrecipitationOverlay areas={areas} />
 
-      {/* Geographic area labels (Jurong, Orchard Road, Changi, SINGAPORE) */}
+      {/* Geographic area labels */}
       <WeatherMesh />
 
-      <TaxiMarkers />
+      {/* Live taxi positions — canvas dot layer, z-index 450 */}
+      <TaxiDotLayer taxis={taxis} />
     </MapContainer>
   );
 }

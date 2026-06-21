@@ -1,5 +1,6 @@
 import { useNowcast } from './hooks/useNowcast';
 import { useHotspots } from './hooks/useHotspots';
+import { useTaxis } from './hooks/useTaxis';
 import MapLayer from './components/MapLayer';
 import HeaderOverlay from './components/HeaderOverlay';
 import Legend from './components/Legend';
@@ -12,13 +13,14 @@ import BottomNav from './components/BottomNav';
 export default function App() {
   const { data: nowcast } = useNowcast();
   const { data: hotspotsData } = useHotspots();
+  const { data: taxisData } = useTaxis();
 
   return (
     <div className="fixed inset-0 bg-[#0a0e14] overflow-hidden">
 
       {/* ── Full-viewport map base ─────────────────────────────────────────── */}
       <div className="absolute inset-0">
-        <MapLayer areas={nowcast.areas} />
+        <MapLayer areas={nowcast.areas} taxis={taxisData.taxis} />
       </div>
 
       {/* ── Top-left: header + dynamic alert ──────────────────────────────── */}
