@@ -29,7 +29,7 @@ def analytics_taxi_weather_mart(ingest_sg_raw_data): # 👈 FIXED: Added the arg
         GROUP BY 1, 2, 3;
     """
     conn.execute(query)
-    metrics = conn.execute("SELECT COUNT(*) FROM mart.fct_taxi_weather_trends").fetchone()
+    row_count = conn.execute("SELECT COUNT(*) FROM mart.fct_taxi_weather_trends").fetchone()[0]
     conn.close()
-    
-    return Output(value=None, metadata={"total_analytics_rows": metrics})
+
+    return Output(value=None, metadata={"total_analytics_rows": row_count})

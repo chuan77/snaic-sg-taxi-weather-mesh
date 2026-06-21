@@ -45,15 +45,15 @@ def connect_data_warehouse(db_path, duckdb):
 def extract_warehouse_metrics(conn, pd):
     try:
         df_trends = conn.execute("""
-            SELECT event_hour, grid_lat, grid_lon, available_taxis_count, 
-                   avg_regional_temperature, prominent_weather_condition 
+            SELECT event_hour, grid_lat, grid_lon, available_taxis_count,
+                   prominent_weather_condition
             FROM mart.fct_taxi_weather_trends
             ORDER BY event_hour DESC
         """).df()
     except Exception:
         df_trends = pd.DataFrame([{
             "event_hour": pd.Timestamp.now(), "grid_lat": 1.35, "grid_lon": 103.82,
-            "available_taxis_count": 0, "avg_regional_temperature": 27.5,
+            "available_taxis_count": 0,
             "prominent_weather_condition": "Awaiting Database Generation"
         }])
     return df_trends
@@ -62,33 +62,31 @@ def extract_warehouse_metrics(conn, pd):
 @app.cell
 def pipeline_transform_kpis(df_trends):
     total_active_taxis = df_trends["available_taxis_count"].sum()
-    mean_temp = df_trends["avg_regional_temperature"].mean()
     top_condition = df_trends["prominent_weather_condition"].mode().head(1).values if not df_trends.empty else "N/A"
-    return mean_temp, top_condition, total_active_taxis
+    return top_condition, total_active_taxis
 
 
 @app.cell
-def build_ui_dashlets(mean_temp, mo, top_condition, total_active_taxis):
+def build_ui_dashlets(mo, top_condition, total_active_taxis):
     kpi_total_taxis = mo.stat(value=f"{total_active_taxis:,}", label="Active Fleet Density")
-    kpi_avg_temp = mo.stat(value=f"{mean_temp:.1f} °C", label="Mean Grid Temperature")
-    kpi_monsoon = mo.stat(value=str(top_condition), label="Prevalent Weather Mode", color="blue")
-    
-    dashlet_row = mo.hstack([kpi_total_taxis, kpi_avg_temp, kpi_monsoon], justify="space-between")
-    return dashlet_row, kpi_avg_temp, kpi_monsoon, kpi_total_taxis
+    kpi_monsoon = mo.stat(value=str(top_condition), label="Prevalent Weather Mode")
+
+    dashlet_row = mo.hstack([kpi_total_taxis, kpi_monsoon], justify="space-between")
+    return dashlet_row, kpi_monsoon, kpi_total_taxis
 
 
 @app.cell
 def build_geospatial_heatmap(df_trends, px):
     if not df_trends.empty and df_trends["available_taxis_count"].sum() > 0:
-        fig = px.density_mapbox(
+        fig = px.density_map(
             df_trends, lat="grid_lat", lon="grid_lon", z="available_taxis_count", radius=25,
             center=dict(lat=1.3521, lon=103.8198), zoom=10.8,
-            mapbox_style="carto-darkmatter", title="Live Regional Density Map Layer (From DuckDB Grid)",
-            hover_data=["avg_regional_temperature", "prominent_weather_condition"]
+            map_style="carto-darkmatter", title="Live Regional Density Map Layer (From DuckDB Grid)",
+            hover_data=["prominent_weather_condition"]
         )
         fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, paper_bgcolor="#0f172a")
     else:
-        fig = px.scatter_mapbox(lat=[1.3521], lon=[103.8198], zoom=10.5, mapbox_style="carto-darkmatter", title="Awaiting Data Synchronization...")
+        fig = px.scatter_map(lat=[1.3521], lon=[103.8198], zoom=10.5, map_style="carto-darkmatter", title="Awaiting Data Synchronization...")
         fig.update_layout(margin={"r":0,"t":40,"l":0,"b":0})
     return fig
 

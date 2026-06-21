@@ -97,3 +97,28 @@ def test_geospatial_grid_no_weather_match(in_memory_warehouse):
     assert len(results) == 1
     assert results[0][3] == 1        # available_taxis_count
     assert results[0][4] is None     # no weather match → NULL forecast
+
+def test_analytics_asset_metadata_is_int(tmp_path, monkeypatch):
+    """Regression: analytics asset must emit an int for total_analytics_rows, not a tuple.
+
+    fetchone() returns (n,) — passing that tuple raw to Dagster Output metadata raises
+    DagsterInvalidMetadata. This test catches that class of mistake.
+    """
+    import duckdb as _duckdb
+    from sg_transit_weather_mesh.assets.analytics import analytics_taxi_weather_mart
+
+    db_path = str(tmp_path / "warehouse.duckdb")
+    conn = _duckdb.connect(db_path)
+    conn.execute("CREATE SCHEMA raw;")
+    conn.execute("CREATE TABLE raw.taxi_availability (timestamp VARCHAR, latitude DOUBLE, longitude DOUBLE);")
+    conn.execute("CREATE TABLE raw.weather_forecast (timestamp VARCHAR, area VARCHAR, forecast VARCHAR, latitude DOUBLE, longitude DOUBLE);")
+    conn.execute("INSERT INTO raw.taxi_availability VALUES ('2026-06-21T01:00:00+08:00', 1.35, 103.82);")
+    conn.close()
+
+    _original_connect = _duckdb.connect
+    monkeypatch.setattr(_duckdb, "connect", lambda *_: _original_connect(db_path))
+
+    output = analytics_taxi_weather_mart(ingest_sg_raw_data=None)
+    row_count = output.metadata["total_analytics_rows"].value
+    assert isinstance(row_count, int), f"Expected int, got {type(row_count)}"
+    assert row_count == 1

@@ -14,3 +14,27 @@ data/warehouse.duckdb
 # Optional: If you want to keep the config directory structure on GitHub 
 # but hide your actual secrets, ignore the real yaml file and keep a template:
 config/config.yaml
+
+# Ignore Dagster local temporary running cache directories
+.tmp_dagster_home_*/
+**/.tmp_dagster_home_*
+
+# Ignore the persistent local Dagster metrics tracking metadata directory
+.dagster_home/
+
+# Ignore dlt (Data Load Tool) hidden working pipelines metadata folders
+.dlt/
+
+# ==========================================
+# 🗄️ Relational Database & Warehouse Dumps
+# ==========================================
+
+# Ignore all variants of localized relational database formats
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Ignore your core centralized persistent DuckDB file engine
+data/*.duckdb
+data/*.duckdb.wal
