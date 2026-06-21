@@ -15,7 +15,8 @@ _NOWCAST_JSON   = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "nowcast
 _HOTSPOTS_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "hotspots.json"
 _TAXIS_JSON     = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis.json"
 _SURGE_JSON     = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "surge.json"
-_CLUSTERS_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "clusters.json"
+_CLUSTERS_JSON    = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "clusters.json"
+_FORECAST24H_JSON = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast24h.json"
 
 # NEA official forecast string → WeatherIntensity level used by the frontend
 FORECAST_INTENSITY: dict[str, str] = {
@@ -754,5 +755,114 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
             "cluster_count":    len(clusters),
             "silhouette_score": sil_score if sil_score is not None else "n/a",
             "clusters_path":    str(_CLUSTERS_JSON),
+        },
+    )
+
+
+@asset(
+    ins={
+        "ingest_sg_raw_data":          AssetIn(),
+        "analytics_taxi_weather_mart": AssetIn(),
+    },
+    compute_kind="duckdb",
+)
+def weather_24hr_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
+    """Reads latest NEA 24-hour forecast from DuckDB, computes dominant intensity per
+    time period and per region, then writes forecast24h.json for the React dashboard."""
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        try:
+            rows = conn.execute("""
+                SELECT period_text, period_start, period_end,
+                       region, forecast,
+                       general_forecast, temp_low, temp_high, rh_low, rh_high,
+                       valid_start, valid_end, fetched_at
+                FROM raw.weather_forecast_24hr
+                WHERE fetched_at = (SELECT MAX(fetched_at) FROM raw.weather_forecast_24hr)
+                ORDER BY period_start, region
+            """).fetchall()
+        except Exception:
+            rows = []
+    finally:
+        conn.close()
+
+    if not rows:
+        return Output(value=None, metadata={"periods_exported": 0})
+
+    # Extract scalar header fields from any row (identical across all rows for same fetched_at)
+    r0 = rows[0]
+    general_forecast = str(r0[5])
+    temp_low, temp_high = int(r0[6] or 0), int(r0[7] or 0)
+    rh_low, rh_high   = int(r0[8] or 0), int(r0[9] or 0)
+    valid_start, valid_end = str(r0[10] or ""), str(r0[11] or "")
+    updated_at = str(r0[12] or datetime.now().astimezone().isoformat())
+
+    general_intensity = FORECAST_INTENSITY.get(general_forecast, "drizzle")
+
+    # Group rows by period_text (preserving period_start order from SQL ORDER BY)
+    from collections import OrderedDict
+    periods_map: OrderedDict = OrderedDict()
+    for row in rows:
+        period_text  = str(row[0])
+        period_start = str(row[1] or "")
+        period_end   = str(row[2] or "")
+        region       = str(row[3])
+        forecast     = str(row[4] or "")
+        intensity    = FORECAST_INTENSITY.get(forecast, "drizzle")
+
+        if period_text not in periods_map:
+            periods_map[period_text] = {
+                "time_text":  period_text,
+                "start":      period_start,
+                "end":        period_end,
+                "regions":    {},
+                "_ranks":     [],
+                "_forecasts": [],
+            }
+        periods_map[period_text]["regions"][region] = intensity
+        periods_map[period_text]["_ranks"].append(INTENSITY_RANK.get(intensity, 0))
+        periods_map[period_text]["_forecasts"].append(forecast)
+
+    periods: list[dict] = []
+    for p in periods_map.values():
+        max_rank = max(p["_ranks"]) if p["_ranks"] else 0
+        # dominant_forecast: pick the forecast string that matches the highest intensity rank
+        dominant_intensity = _RANK_TO_LEVEL[max_rank]
+        dominant_forecast = next(
+            (f for f, r in zip(p["_forecasts"], p["_ranks"]) if r == max_rank),
+            general_forecast,
+        )
+        periods.append({
+            "time_text":          p["time_text"],
+            "start":              p["start"],
+            "end":                p["end"],
+            "dominant_intensity": dominant_intensity,
+            "dominant_forecast":  dominant_forecast,
+            "regions":            p["regions"],
+        })
+
+    payload = {
+        "updated_at":   updated_at,
+        "valid_period": {"start": valid_start, "end": valid_end},
+        "general": {
+            "forecast":   general_forecast,
+            "intensity":  general_intensity,
+            "temp_low":   temp_low,
+            "temp_high":  temp_high,
+            "rh_low":     rh_low,
+            "rh_high":    rh_high,
+        },
+        "periods": periods,
+    }
+
+    _FORECAST24H_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _FORECAST24H_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return Output(
+        value=None,
+        metadata={
+            "periods_exported":  len(periods),
+            "general_intensity": general_intensity,
+            "forecast24h_path":  str(_FORECAST24H_JSON),
         },
     )

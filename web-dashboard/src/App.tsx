@@ -4,11 +4,13 @@ import { useHotspots } from './hooks/useHotspots';
 import { useTaxis } from './hooks/useTaxis';
 import { useSurge } from './hooks/useSurge';
 import { useClusters } from './hooks/useClusters';
+import { useForecast24h } from './hooks/useForecast24h';
 import MapLayer from './components/MapLayer';
 import HeaderOverlay from './components/HeaderOverlay';
 import Legend from './components/Legend';
 import StatusKey from './components/StatusKey';
 import NowcastTimeline from './components/NowcastTimeline';
+import Forecast24hTimeline from './components/Forecast24hTimeline';
 import DemandHotspots from './components/DemandHotspots';
 import StatsPanel from './components/StatsPanel';
 import AlertsPanel from './components/AlertsPanel';
@@ -23,6 +25,7 @@ export default function App() {
   const { data: taxisData } = useTaxis();
   const { data: surgeData } = useSurge();
   const { data: clustersData } = useClusters();
+  const { data: forecast24h } = useForecast24h();
 
   const mapMode = activeTab === 'demand' ? 'heatmap' : 'map';
 
@@ -79,6 +82,7 @@ export default function App() {
           style={{ bottom: '60px', zIndex: 1001 }}
         >
           <NowcastTimeline steps={nowcast.timeline} validPeriodText={nowcast.valid_period.text} />
+          <Forecast24hTimeline data={forecast24h} />
           <DemandHotspots
             hotspots={hotspotsData.hotspots}
             totalTaxis={hotspotsData.total_taxis_online}

@@ -31,6 +31,7 @@ web-dashboard/public/data/nowcast.json
 web-dashboard/public/data/taxis.json
 web-dashboard/public/data/surge.json
 web-dashboard/public/data/clusters.json
+web-dashboard/public/data/forecast24h.json
 
 # ==========================================
 # 🗄️ Relational Database & Warehouse Dumps

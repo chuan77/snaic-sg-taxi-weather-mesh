@@ -1,6 +1,7 @@
 # sg_transit_weather_mesh/assets/ingestion.py
 import dlt
 import requests
+from datetime import datetime
 from pathlib import Path
 from dagster import asset, Output
 from ..utils import load_config
@@ -13,8 +14,9 @@ config = load_config()
 _HEADERS_V1 = {"x-api-key": config["api"]["key"]}
 _BASE_URL_V1 = config["api"]["base_url"]
 
-# v2 open API (2-hr weather forecast) — no authentication required
-_WEATHER_V2_URL = "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast"
+# v2 open API — no authentication required
+_WEATHER_V2_URL    = "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast"
+_WEATHER_24H_V2_URL = "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast"
 
 
 @dlt.source
@@ -81,7 +83,50 @@ def sg_gov_source():
                 "longitude": loc.get("longitude"),
             }
 
-    return taxi_availability, weather_forecast
+    @dlt.resource(name="weather_forecast_24hr", write_disposition="replace",
+                  primary_key=["fetched_at", "period_text", "region"])
+    def weather_forecast_24hr():
+        """24-hour regional forecast from NEA via the data.gov.sg v2 open API.
+
+        Yields one row per (period × region) combination so the mart can query
+        by period label or region without JSON parsing.
+        """
+        resp = requests.get(_WEATHER_24H_V2_URL, timeout=30)
+        resp.raise_for_status()
+        records = resp.json().get("data", {}).get("records", [])
+        if not records:
+            return
+        rec = records[0]
+        fetched_at       = rec.get("updatedTimestamp", datetime.utcnow().isoformat())
+        valid_start      = rec.get("validPeriod", {}).get("start", "")
+        valid_end        = rec.get("validPeriod", {}).get("end", "")
+        general_forecast = rec.get("general", {}).get("forecast", {}).get("summary", "")
+        temp_low         = rec.get("general", {}).get("temperature", {}).get("low", 0)
+        temp_high        = rec.get("general", {}).get("temperature", {}).get("high", 0)
+        rh_low           = rec.get("general", {}).get("relativeHumidity", {}).get("low", 0)
+        rh_high          = rec.get("general", {}).get("relativeHumidity", {}).get("high", 0)
+        for period in rec.get("periods", []):
+            period_text  = period.get("timePeriod", {}).get("text", "")
+            period_start = period.get("timePeriod", {}).get("start", "")
+            period_end   = period.get("timePeriod", {}).get("end", "")
+            for region, rdata in period.get("regions", {}).items():
+                yield {
+                    "fetched_at":       fetched_at,
+                    "valid_start":      valid_start,
+                    "valid_end":        valid_end,
+                    "general_forecast": general_forecast,
+                    "temp_low":         temp_low,
+                    "temp_high":        temp_high,
+                    "rh_low":           rh_low,
+                    "rh_high":          rh_high,
+                    "period_text":      period_text,
+                    "period_start":     period_start,
+                    "period_end":       period_end,
+                    "region":           region,
+                    "forecast":         rdata.get("forecast", ""),
+                }
+
+    return taxi_availability, weather_forecast, weather_forecast_24hr
 
 
 @asset(compute_kind="dlt")

@@ -121,3 +121,26 @@ export interface NowcastData {
   areas: NowcastArea[];
   timeline: NowcastStep[];
 }
+
+export interface Forecast24hPeriod {
+  time_text: string;
+  start: string;
+  end: string;
+  dominant_intensity: WeatherIntensity;
+  dominant_forecast: string;
+  regions: Record<string, WeatherIntensity>;
+}
+
+export interface Forecast24hData {
+  updated_at: string;
+  valid_period: { start: string; end: string };
+  general: {
+    forecast: string;
+    intensity: WeatherIntensity;
+    temp_low: number;
+    temp_high: number;
+    rh_low: number;
+    rh_high: number;
+  };
+  periods: Forecast24hPeriod[];
+}
