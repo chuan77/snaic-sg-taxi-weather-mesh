@@ -62,7 +62,7 @@ def extract_warehouse_metrics(conn, pd):
 @app.cell
 def pipeline_transform_kpis(df_trends):
     total_active_taxis = df_trends["available_taxis_count"].sum()
-    top_condition = df_trends["prominent_weather_condition"].mode().head(1).values if not df_trends.empty else "N/A"
+    top_condition = df_trends["prominent_weather_condition"].mode().iloc[0] if not df_trends.empty else "N/A"
     return top_condition, total_active_taxis
 
 
