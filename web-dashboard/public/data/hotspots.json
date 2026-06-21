@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-06-21T14:45:07.013131+08:00",
-  "total_taxis_online": 1698,
-  "snapshot_timestamp": "2026-06-21 14:44:59+08:00",
+  "updated_at": "2026-06-21T14:55:07.788166+08:00",
+  "total_taxis_online": 2000,
+  "snapshot_timestamp": "2026-06-21 14:55:00+08:00",
   "hotspots": [
     {
       "id": "h1",
       "name": "Marina Bay / CBD",
-      "level": "high",
-      "taxi_count": 35,
+      "level": "medium",
+      "taxi_count": 40,
       "lat": 1.2897,
       "lng": 103.8501
     },
@@ -15,15 +15,15 @@
       "id": "h2",
       "name": "Changi Airport",
       "level": "high",
-      "taxi_count": 152,
+      "taxi_count": 173,
       "lat": 1.3592,
       "lng": 103.9894
     },
     {
       "id": "h3",
       "name": "Orchard Road",
-      "level": "medium",
-      "taxi_count": 14,
+      "level": "low",
+      "taxi_count": 19,
       "lat": 1.3048,
       "lng": 103.8318
     },
@@ -31,23 +31,23 @@
       "id": "h4",
       "name": "Jurong East",
       "level": "low",
-      "taxi_count": 7,
+      "taxi_count": 21,
       "lat": 1.333,
       "lng": 103.7436
     },
     {
       "id": "h5",
       "name": "Woodlands",
-      "level": "low",
-      "taxi_count": 10,
+      "level": "medium",
+      "taxi_count": 30,
       "lat": 1.4382,
       "lng": 103.7891
     },
     {
       "id": "h6",
       "name": "Tampines",
-      "level": "medium",
-      "taxi_count": 29,
+      "level": "high",
+      "taxi_count": 41,
       "lat": 1.353,
       "lng": 103.9434
     }

@@ -1,6 +1,7 @@
 import { MapContainer, TileLayer } from 'react-leaflet';
 import WeatherMesh from './WeatherMesh';
 import TaxiDotLayer from './TaxiDotLayer';
+import DemandHeatLayer from './DemandHeatLayer';
 import { PrecipitationOverlay } from './PrecipitationOverlay';
 import type { NowcastArea, TaxiPoint } from '../types';
 
@@ -13,9 +14,10 @@ const ATTRIBUTION =
 interface Props {
   areas?: NowcastArea[];
   taxis?: TaxiPoint[];
+  mode?: 'map' | 'heatmap';
 }
 
-export default function MapLayer({ areas = [], taxis = [] }: Props) {
+export default function MapLayer({ areas = [], taxis = [], mode = 'map' }: Props) {
   return (
     <MapContainer
       center={[1.352, 103.819]}
@@ -28,14 +30,15 @@ export default function MapLayer({ areas = [], taxis = [] }: Props) {
     >
       <TileLayer url={DARK_TILES} attribution={ATTRIBUTION} subdomains="abcd" maxZoom={20} />
 
-      {/* Gradient precipitation blobs — below taxi dots */}
-      <PrecipitationOverlay areas={areas} />
+      {/* Map view: weather overlay + taxi dots */}
+      {mode === 'map' && <PrecipitationOverlay areas={areas} />}
+      {mode === 'map' && <TaxiDotLayer taxis={taxis} />}
 
-      {/* Geographic area labels */}
+      {/* Heatmap view: demand density */}
+      {mode === 'heatmap' && <DemandHeatLayer taxis={taxis} />}
+
+      {/* Area labels visible in both modes */}
       <WeatherMesh />
-
-      {/* Live taxi positions — canvas dot layer, z-index 450 */}
-      <TaxiDotLayer taxis={taxis} />
     </MapContainer>
   );
 }

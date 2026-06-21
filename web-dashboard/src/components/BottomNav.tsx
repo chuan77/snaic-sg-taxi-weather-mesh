@@ -1,10 +1,8 @@
-import { useState } from 'react';
-
 const TABS = [
-  { id: 'map',    icon: '🗺️', label: 'Map View'        },
-  { id: 'demand', icon: '🔥', label: 'Demand Heatmap'  },
-  { id: 'route',  icon: '🔀', label: 'Route Planner'   },
-  { id: 'alerts', icon: '🔔', label: 'Alerts'           },
+  { id: 'map',    icon: '🗺️', label: 'Map View'       },
+  { id: 'demand', icon: '🔥', label: 'Demand Heatmap' },
+  { id: 'route',  icon: '🔀', label: 'Route Planner'  },
+  { id: 'alerts', icon: '🔔', label: 'Alerts'          },
 ];
 
 const LINKS = [
@@ -13,9 +11,12 @@ const LINKS = [
   { label: 'BOOK CDG TAXI',          href: '#'                           },
 ];
 
-export default function BottomNav() {
-  const [active, setActive] = useState('map');
+interface Props {
+  activeTab: string;
+  onTabChange: (id: string) => void;
+}
 
+export default function BottomNav({ activeTab, onTabChange }: Props) {
   return (
     <div
       className="absolute bottom-0 left-0 right-0"
@@ -36,11 +37,11 @@ export default function BottomNav() {
       {/* ── Tabs ──────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-0 flex-shrink-0">
         {TABS.map((tab) => {
-          const isActive = tab.id === active;
+          const isActive = tab.id === activeTab;
           return (
             <button
               key={tab.id}
-              onClick={() => setActive(tab.id)}
+              onClick={() => onTabChange(tab.id)}
               className="relative flex items-center gap-1.5 px-4 h-14 font-bold uppercase tracking-widest transition-colors duration-150"
               style={{
                 fontSize: 10,
@@ -51,7 +52,6 @@ export default function BottomNav() {
                 letterSpacing: '0.12em',
               }}
             >
-              {/* Active top accent */}
               {isActive && (
                 <div
                   className="absolute top-0 left-2 right-2"
@@ -64,11 +64,7 @@ export default function BottomNav() {
                 />
               )}
               <span>{tab.icon}</span>
-              <span
-                style={{
-                  textShadow: isActive ? '0 0 12px rgba(34,211,238,0.6)' : 'none',
-                }}
-              >
+              <span style={{ textShadow: isActive ? '0 0 12px rgba(34,211,238,0.6)' : 'none' }}>
                 {tab.label}
               </span>
             </button>
@@ -76,7 +72,6 @@ export default function BottomNav() {
         })}
       </div>
 
-      {/* ── Spacer ────────────────────────────────────────────────────────── */}
       <div className="flex-1" />
 
       {/* ── External links ────────────────────────────────────────────────── */}

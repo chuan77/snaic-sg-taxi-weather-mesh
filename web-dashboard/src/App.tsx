@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNowcast } from './hooks/useNowcast';
 import { useHotspots } from './hooks/useHotspots';
 import { useTaxis } from './hooks/useTaxis';
@@ -11,23 +12,26 @@ import StatsPanel from './components/StatsPanel';
 import BottomNav from './components/BottomNav';
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState('map');
   const { data: nowcast } = useNowcast();
   const { data: hotspotsData } = useHotspots();
   const { data: taxisData } = useTaxis();
+
+  const mapMode = activeTab === 'demand' ? 'heatmap' : 'map';
 
   return (
     <div className="fixed inset-0 bg-[#0a0e14] overflow-hidden">
 
       {/* ── Full-viewport map base ─────────────────────────────────────────── */}
       <div className="absolute inset-0">
-        <MapLayer areas={nowcast.areas} taxis={taxisData.taxis} />
+        <MapLayer areas={nowcast.areas} taxis={taxisData.taxis} mode={mapMode} />
       </div>
 
       {/* ── Top-left: header + dynamic alert ──────────────────────────────── */}
       <HeaderOverlay alert={nowcast.alert} />
 
-      {/* ── Top-right: legend ─────────────────────────────────────────────── */}
-      <Legend />
+      {/* ── Top-right: legend (switches content based on active tab) ──────── */}
+      <Legend mode={mapMode} />
 
       {/* ── Right: taxi status key ────────────────────────────────────────── */}
       <StatusKey />
@@ -43,7 +47,7 @@ export default function App() {
       </div>
 
       {/* ── Bottom nav bar ────────────────────────────────────────────────── */}
-      <BottomNav />
+      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
     </div>
   );
 }

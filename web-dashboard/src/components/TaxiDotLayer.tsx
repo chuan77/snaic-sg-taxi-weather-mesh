@@ -22,14 +22,16 @@ export default function TaxiDotLayer({ taxis }: Props): null {
     if (!ctx) return;
     ctx.clearRect(0, 0, size.x, size.y);
 
+    // Batch all dots into a single path — one fill call instead of 15k
+    ctx.beginPath();
     for (const taxi of taxisRef.current) {
       const pt = map.latLngToContainerPoint([taxi.lat, taxi.lng]);
       if (pt.x < -3 || pt.x > size.x + 3 || pt.y < -3 || pt.y > size.y + 3) continue;
-      ctx.beginPath();
+      ctx.moveTo(pt.x + 2, pt.y);
       ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(34,197,94,0.72)';
-      ctx.fill();
     }
+    ctx.fillStyle = 'rgba(34,197,94,0.72)';
+    ctx.fill();
   }, [map]);
 
   useEffect(() => {
