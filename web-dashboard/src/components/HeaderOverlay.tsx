@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import type { NowcastAlert } from '../types';
+import type { NowcastAlert, SurgeData } from '../types';
 
 interface Props {
   alert: NowcastAlert;
+  surge?: SurgeData;
 }
 
-export default function HeaderOverlay({ alert }: Props) {
+export default function HeaderOverlay({ alert, surge }: Props) {
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
@@ -14,20 +15,18 @@ export default function HeaderOverlay({ alert }: Props) {
   }, []);
 
   const dateStr = now.toLocaleDateString('en-SG', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   });
   const timeStr = now.toLocaleTimeString('en-SG', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
   });
 
-  // Active alerts use amber; informational notices use a muted blue-grey
-  const bannerStyle = alert.active
+  // Surge predictor takes priority over nowcast alert when active and has a message
+  const surgeActive  = Boolean(surge?.alert_active && surge?.alert_message);
+  const isActive     = surgeActive || alert.active;
+  const message      = surgeActive ? surge!.alert_message : alert.message;
+
+  const bannerStyle = isActive
     ? {
         background: 'rgba(245, 158, 11, 0.10)',
         border:     '1px solid rgba(245, 158, 11, 0.38)',
@@ -39,9 +38,9 @@ export default function HeaderOverlay({ alert }: Props) {
         boxShadow:  'none',
       };
 
-  const iconColor    = alert.active ? '#fbbf24' : '#7dd3fc';
-  const messageColor = alert.active ? '#fcd34d' : '#bae6fd';
-  const icon         = alert.active ? '⚠'       : 'ℹ';
+  const iconColor    = isActive ? '#fbbf24' : '#7dd3fc';
+  const messageColor = isActive ? '#fcd34d' : '#bae6fd';
+  const icon         = isActive ? '⚠'       : 'ℹ';
 
   return (
     <div
@@ -49,7 +48,6 @@ export default function HeaderOverlay({ alert }: Props) {
       style={{ zIndex: 1001, maxWidth: 430, pointerEvents: 'none' }}
     >
       <div className="glass p-4" style={{ pointerEvents: 'auto' }}>
-        {/* Title */}
         <div className="flex items-center gap-2.5 mb-1">
           <span className="text-2xl leading-none">🇸🇬</span>
           <h1
@@ -60,7 +58,6 @@ export default function HeaderOverlay({ alert }: Props) {
           </h1>
         </div>
 
-        {/* Live clock */}
         <p
           className="font-semibold uppercase tracking-widest mb-3"
           style={{ fontSize: 10, color: '#22d3ee' }}
@@ -68,15 +65,21 @@ export default function HeaderOverlay({ alert }: Props) {
           Live: {dateStr} | {timeStr}
         </p>
 
-        {/* Dynamic weather alert */}
         <div
           className="flex items-start gap-2 px-3 py-2 rounded-2xl"
           style={bannerStyle}
         >
           <span className="mt-0.5" style={{ fontSize: 14, color: iconColor }}>{icon}</span>
-          <p className="font-semibold leading-snug" style={{ fontSize: 11, color: messageColor }}>
-            {alert.message}
-          </p>
+          <div>
+            <p className="font-semibold leading-snug" style={{ fontSize: 11, color: messageColor }}>
+              {message}
+            </p>
+            {surgeActive && (
+              <p style={{ fontSize: 9, color: 'rgba(252,211,77,0.55)', marginTop: 2 }}>
+                AI demand forecast · LMStudio
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </div>

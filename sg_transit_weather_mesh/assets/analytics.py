@@ -2,14 +2,19 @@
 import json
 import math
 import duckdb
+import numpy as np
+from sklearn.cluster import DBSCAN
 from datetime import datetime
 from pathlib import Path
 from dagster import asset, Output, AssetIn
+from ..utils import ask_llm
 
-_PROJECT_ROOT  = Path(__file__).parent.parent.parent
-_NOWCAST_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "nowcast.json"
-_HOTSPOTS_JSON = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "hotspots.json"
-_TAXIS_JSON    = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis.json"
+_PROJECT_ROOT   = Path(__file__).parent.parent.parent
+_NOWCAST_JSON   = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "nowcast.json"
+_HOTSPOTS_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "hotspots.json"
+_TAXIS_JSON     = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis.json"
+_SURGE_JSON     = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "surge.json"
+_CLUSTERS_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "clusters.json"
 
 # NEA official forecast string → WeatherIntensity level used by the frontend
 FORECAST_INTENSITY: dict[str, str] = {
@@ -115,6 +120,32 @@ HOTSPOT_ZONES: list[dict] = [
 ]
 
 
+# ── SDI (Supply-Demand Index) calibration constants ──────────────────────────
+_ZONE_BASE_DEMAND: dict[str, float] = {
+    "h1": 80.0,  # Marina Bay / CBD
+    "h2": 60.0,  # Changi Airport
+    "h3": 70.0,  # Orchard Road
+    "h4": 40.0,  # Jurong East
+    "h5": 30.0,  # Woodlands
+    "h6": 50.0,  # Tampines
+}
+_WEATHER_DEMAND_MULT: dict[str, float] = {
+    "clear": 1.0, "drizzle": 1.3, "moderate": 1.7, "heavy": 2.2, "storm": 3.0,
+}
+_RUSH_HOURS = {7, 8, 17, 18, 19}
+
+# LLM system prompts
+_SURGE_SYS = (
+    "You are a Singapore taxi dispatch AI. "
+    "Write a single concise demand alert for taxi drivers, max 25 words, no emojis, plain English."
+)
+_CLUSTER_SYS = (
+    "You know Singapore's geography well. "
+    "Reply with only the name of the nearest Singapore neighbourhood or landmark to the given coordinates. "
+    "2-5 words, no punctuation."
+)
+
+
 def _dist_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Flat-earth distance in km — error <0.1% across Singapore's 50 km span."""
     return math.sqrt(((lat2 - lat1) * 111.0) ** 2 + ((lon2 - lon1) * 111.0) ** 2)
@@ -151,6 +182,91 @@ def _rank_hotspots(zones: list[dict]) -> list[dict]:
     levels  = (["high"] * high_n) + (["medium"] * mid_n) + (["low"] * low_n)
     level_map = {z["id"]: lvl for z, lvl in zip(ranked, levels)}
     return [{**z, "level": level_map[z["id"]]} for z in zones]
+
+
+def _compute_sdi(zone_id: str, taxi_count: int, weather_intensity: str, current_hour: int) -> tuple[float, str]:
+    """Supply-Demand Index: ratio of available taxis to expected demand."""
+    rush = 1.5 if current_hour in _RUSH_HOURS else 1.0
+    base = _ZONE_BASE_DEMAND.get(zone_id, 50.0)
+    mult = _WEATHER_DEMAND_MULT.get(weather_intensity, 1.0)
+    expected = max(base * mult * rush, 1.0)
+    sdi = round(taxi_count / expected, 2)
+    label = "Shortage" if sdi < 0.5 else "Tight" if sdi < 1.0 else "Adequate"
+    return sdi, label
+
+
+def _compute_zone_surges(weather_rows: list, hotspot_zones: list[dict]) -> list[dict]:
+    """For each hotspot zone find the nearest NEA forecast area and compute a surge score."""
+    # Build list of (area, forecast, lat, lon, valid_period_start)
+    areas = []
+    for row in weather_rows:
+        area, forecast, lat, lon = row[0], row[1], row[2], row[3]
+        vp_start = row[4] if len(row) > 4 else ""
+        if lat and lon:
+            areas.append((str(area), str(forecast), float(lat), float(lon), str(vp_start)))
+
+    results = []
+    for zone in hotspot_zones:
+        if not areas:
+            nearest_area, nearest_forecast, nearest_vp = "Unknown", "Unknown", ""
+        else:
+            nearest = min(areas, key=lambda a: _dist_km(zone["lat"], zone["lng"], a[2], a[3]))
+            nearest_area, nearest_forecast, _, _, nearest_vp = nearest
+
+        intensity = FORECAST_INTENSITY.get(nearest_forecast, "drizzle")
+        surge_score = INTENSITY_RANK.get(intensity, 0) * 25  # 0/25/50/75/100
+        alert_level = (
+            "critical" if surge_score >= 75
+            else "high" if surge_score >= 50
+            else "moderate" if surge_score >= 25
+            else "low"
+        )
+        results.append({
+            "id":           zone["id"],
+            "name":         zone["name"],
+            "lat":          zone["lat"],
+            "lng":          zone["lng"],
+            "nearest_area": nearest_area,
+            "forecast":     nearest_forecast,
+            "intensity":    intensity,
+            "surge_score":  surge_score,
+            "alert_level":  alert_level,
+            "valid_period_start": nearest_vp,
+        })
+    return results
+
+
+def _build_surge_alert(zone_surges: list[dict]) -> str:
+    """Generate a natural-language alert via LMStudio; falls back to template."""
+    top = sorted(zone_surges, key=lambda z: z["surge_score"], reverse=True)[:2]
+    if not top or top[0]["surge_score"] == 0:
+        return "Mostly fair conditions across Singapore. Normal taxi availability expected."
+
+    zone_summary = "; ".join(
+        f"{z['name']} ({z['forecast']}, score {z['surge_score']})" for z in top
+    )
+    prompt = f"High-demand zones: {zone_summary}. Current time: {datetime.now().strftime('%H:%M')} SGT."
+    message = ask_llm(_SURGE_SYS, prompt)
+    if message:
+        return message
+
+    # Template fallback
+    worst = top[0]
+    intensity_text = {
+        "storm": "Thunderstorms", "heavy": "Heavy rain",
+        "moderate": "Showers", "drizzle": "Drizzle", "clear": "Fair weather",
+    }.get(worst["intensity"], "Rain")
+    return f"{intensity_text} near {worst['name']} — expect surge demand. Position early."
+
+
+def _name_cluster(centroid_lat: float, centroid_lng: float, hotspot_zones: list[dict]) -> str:
+    """Return a name for a taxi cluster: fixed zone name if nearby, else LLM lookup."""
+    for zone in hotspot_zones:
+        if _dist_km(centroid_lat, centroid_lng, zone["lat"], zone["lng"]) <= 1.5:
+            return zone["name"]
+    prompt = f"Singapore coordinates: {centroid_lat:.4f}N, {centroid_lng:.4f}E"
+    name = ask_llm(_CLUSTER_SYS, prompt)
+    return name if name else f"Zone {centroid_lat:.3f},{centroid_lng:.3f}"
 
 
 def _fmt_display_time(dt: datetime) -> str:
@@ -370,27 +486,55 @@ def hotspots_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         snapshot_ts = conn.execute(
             "SELECT MAX(timestamp) FROM raw.taxi_availability"
         ).fetchone()[0]
+        # Fetch latest weather for SDI computation
+        weather_rows = conn.execute("""
+            SELECT area, forecast, latitude, longitude
+            FROM raw.weather_forecast
+            WHERE timestamp = (SELECT MAX(timestamp) FROM raw.weather_forecast)
+        """).fetchall()
     finally:
         conn.close()
 
+    # Build area → intensity lookup for SDI
+    area_intensity: dict[str, str] = {}
+    for row in weather_rows:
+        area_intensity[str(row[0])] = FORECAST_INTENSITY.get(str(row[1]), "drizzle")
+
     zones_counted = _count_taxis_per_zone(taxi_rows, HOTSPOT_ZONES)
     zones_ranked  = _rank_hotspots(zones_counted)
+
+    current_hour = datetime.now().hour
+
+    def _nearest_intensity(zone: dict) -> str:
+        if not weather_rows:
+            return "clear"
+        nearest = min(
+            weather_rows,
+            key=lambda r: _dist_km(zone["lat"], zone["lng"], float(r[2] or 0), float(r[3] or 0))
+            if r[2] and r[3] else float("inf"),
+        )
+        return FORECAST_INTENSITY.get(str(nearest[1]), "drizzle")
+
+    hotspot_list = []
+    for z in zones_ranked:
+        intensity = _nearest_intensity(z)
+        sdi, sdi_label = _compute_sdi(z["id"], z["taxi_count"], intensity, current_hour)
+        hotspot_list.append({
+            "id":         z["id"],
+            "name":       z["name"],
+            "level":      z["level"],
+            "taxi_count": z["taxi_count"],
+            "sdi":        sdi,
+            "sdi_label":  sdi_label,
+            "lat":        z["lat"],
+            "lng":        z["lng"],
+        })
 
     payload = {
         "updated_at":         datetime.now().astimezone().isoformat(),
         "total_taxis_online": len(taxi_rows),
         "snapshot_timestamp": str(snapshot_ts) if snapshot_ts else "",
-        "hotspots": [
-            {
-                "id":         z["id"],
-                "name":       z["name"],
-                "level":      z["level"],
-                "taxi_count": z["taxi_count"],
-                "lat":        z["lat"],
-                "lng":        z["lng"],
-            }
-            for z in zones_ranked
-        ],
+        "hotspots":           hotspot_list,
     }
 
     _HOTSPOTS_JSON.parent.mkdir(parents=True, exist_ok=True)
@@ -443,3 +587,114 @@ def taxis_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     _TAXIS_JSON.write_text(json.dumps(payload, separators=(",", ":")))
 
     return Output(value=None, metadata={"taxi_count": len(taxis), "taxis_path": str(_TAXIS_JSON)})
+
+
+@asset(
+    ins={
+        "ingest_sg_raw_data":          AssetIn(),
+        "analytics_taxi_weather_mart": AssetIn(),
+    },
+    compute_kind="python",
+)
+def surge_predictor_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
+    """Scores each hotspot zone for demand surge risk using the NEA 2-hr forecast,
+    then calls the local LLM to generate a natural-language alert message."""
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        weather_rows = conn.execute("""
+            SELECT area, forecast, latitude, longitude, valid_period_start
+            FROM raw.weather_forecast
+            WHERE timestamp = (SELECT MAX(timestamp) FROM raw.weather_forecast)
+        """).fetchall()
+    finally:
+        conn.close()
+
+    zone_surges   = _compute_zone_surges(weather_rows, HOTSPOT_ZONES)
+    alert_message = _build_surge_alert(zone_surges)
+    alert_active  = any(z["surge_score"] >= 50 for z in zone_surges)
+
+    payload = {
+        "updated_at":    datetime.now().astimezone().isoformat(),
+        "alert_active":  alert_active,
+        "alert_message": alert_message,
+        "zones":         zone_surges,
+    }
+    _SURGE_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _SURGE_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return Output(
+        value=None,
+        metadata={
+            "alert_active":  alert_active,
+            "alert_message": alert_message,
+            "zone_scores":   {z["name"]: z["surge_score"] for z in zone_surges},
+        },
+    )
+
+
+@asset(
+    ins={
+        "ingest_sg_raw_data":          AssetIn(),
+        "analytics_taxi_weather_mart": AssetIn(),
+    },
+    compute_kind="python",
+)
+def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
+    """Discovers dynamic taxi supply clusters with DBSCAN and names them via LLM."""
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        rows = conn.execute("""
+            SELECT latitude, longitude
+            FROM raw.taxi_availability
+            WHERE timestamp = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+        """).fetchall()
+        snapshot_ts = conn.execute(
+            "SELECT MAX(timestamp) FROM raw.taxi_availability"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    coords = np.array(
+        [[float(r[0]), float(r[1])] for r in rows if r[0] and r[1]], dtype=np.float64
+    )
+
+    clusters: list[dict] = []
+    if len(coords) >= 20:
+        # eps is in radians for haversine metric: 2 km / 6371 km ≈ 0.000314
+        db = DBSCAN(eps=0.0003, min_samples=10, algorithm="ball_tree", metric="haversine").fit(
+            np.radians(coords)
+        )
+        for label in sorted(set(db.labels_)):
+            if label == -1:
+                continue
+            mask     = db.labels_ == label
+            pts      = coords[mask]
+            centroid = pts.mean(axis=0)
+            radius   = max(
+                (_dist_km(p[0], p[1], float(centroid[0]), float(centroid[1])) for p in pts),
+                default=0.0,
+            )
+            name = _name_cluster(float(centroid[0]), float(centroid[1]), HOTSPOT_ZONES)
+            clusters.append({
+                "id":           f"c{label}",
+                "name":         name,
+                "centroid_lat": round(float(centroid[0]), 4),
+                "centroid_lng": round(float(centroid[1]), 4),
+                "count":        int(mask.sum()),
+                "radius_km":    round(radius, 2),
+            })
+        clusters.sort(key=lambda c: c["count"], reverse=True)
+
+    payload = {
+        "updated_at":       datetime.now().astimezone().isoformat(),
+        "snapshot_timestamp": str(snapshot_ts) if snapshot_ts else "",
+        "cluster_count":    len(clusters),
+        "clusters":         clusters,
+    }
+    _CLUSTERS_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _CLUSTERS_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return Output(
+        value=None,
+        metadata={"cluster_count": len(clusters), "clusters_path": str(_CLUSTERS_JSON)},
+    )

@@ -2,8 +2,9 @@ import { MapContainer, TileLayer } from 'react-leaflet';
 import WeatherMesh from './WeatherMesh';
 import TaxiDotLayer from './TaxiDotLayer';
 import DemandHeatLayer from './DemandHeatLayer';
+import ClusterOverlay from './ClusterOverlay';
 import { PrecipitationOverlay } from './PrecipitationOverlay';
-import type { NowcastArea, TaxiPoint } from '../types';
+import type { NowcastArea, TaxiPoint, ClusterEntry } from '../types';
 
 const DARK_TILES =
   'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -14,10 +15,18 @@ const ATTRIBUTION =
 interface Props {
   areas?: NowcastArea[];
   taxis?: TaxiPoint[];
+  clusters?: ClusterEntry[];
   mode?: 'map' | 'heatmap';
+  invertHeatmap?: boolean;
 }
 
-export default function MapLayer({ areas = [], taxis = [], mode = 'map' }: Props) {
+export default function MapLayer({
+  areas = [],
+  taxis = [],
+  clusters = [],
+  mode = 'map',
+  invertHeatmap = false,
+}: Props) {
   return (
     <MapContainer
       center={[1.352, 103.819]}
@@ -34,10 +43,13 @@ export default function MapLayer({ areas = [], taxis = [], mode = 'map' }: Props
       {mode === 'map' && <PrecipitationOverlay areas={areas} />}
       {mode === 'map' && <TaxiDotLayer taxis={taxis} />}
 
-      {/* Heatmap view: demand density */}
-      {mode === 'heatmap' && <DemandHeatLayer taxis={taxis} />}
+      {/* Heatmap view: density or inverse supply gap */}
+      {mode === 'heatmap' && <DemandHeatLayer taxis={taxis} invert={invertHeatmap} />}
 
-      {/* Area labels visible in both modes */}
+      {/* DBSCAN cluster circles — visible in both modes */}
+      <ClusterOverlay clusters={clusters} />
+
+      {/* Area labels — visible in both modes */}
       <WeatherMesh />
     </MapContainer>
   );

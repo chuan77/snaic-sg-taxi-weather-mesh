@@ -25,6 +25,13 @@ config/config.yaml
 # Ignore dlt (Data Load Tool) hidden working pipelines metadata folders
 .dlt/
 
+# Dagster-generated dashboard data files (written at runtime, not committed)
+web-dashboard/public/data/hotspots.json
+web-dashboard/public/data/nowcast.json
+web-dashboard/public/data/taxis.json
+web-dashboard/public/data/surge.json
+web-dashboard/public/data/clusters.json
+
 # ==========================================
 # 🗄️ Relational Database & Warehouse Dumps
 # ==========================================

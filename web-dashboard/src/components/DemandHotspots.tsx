@@ -1,17 +1,33 @@
-import type { HotspotEntry } from '../types';
+import type { HotspotEntry, SurgeZone } from '../types';
 
 const LEVEL_STYLE = {
-  high:   { label: 'HIGH',   badge: 'PURPLE', textColor: '#e879f9', dotColor: '#a855f7' },
-  medium: { label: 'MEDIUM', badge: 'BLUE',   textColor: '#38bdf8', dotColor: '#3b82f6' },
-  low:    { label: 'LOW',    badge: 'CYAN',   textColor: '#06b6d4', dotColor: '#06b6d4' },
+  high:   { dotColor: '#a855f7' },
+  medium: { dotColor: '#3b82f6' },
+  low:    { dotColor: '#06b6d4' },
+};
+
+const SDI_COLOR: Record<string, string> = {
+  Shortage: '#ef4444',
+  Tight:    '#f59e0b',
+  Adequate: '#22c55e',
+};
+
+const SURGE_PULSE: Record<string, string> = {
+  critical: '#ef4444',
+  high:     '#f97316',
+  moderate: '#eab308',
+  low:      '',
 };
 
 interface Props {
   hotspots: HotspotEntry[];
   totalTaxis?: number;
+  surgeZones?: SurgeZone[];
 }
 
-export default function DemandHotspots({ hotspots, totalTaxis }: Props) {
+export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [] }: Props) {
+  const surgeMap = Object.fromEntries(surgeZones.map(z => [z.id, z]));
+
   return (
     <div className="glass p-3 flex-1 pointer-events-auto">
       <div className="flex items-center justify-between mb-2.5">
@@ -30,15 +46,20 @@ export default function DemandHotspots({ hotspots, totalTaxis }: Props) {
 
       <div className="flex flex-col gap-2">
         {hotspots.map((h) => {
-          const style = LEVEL_STYLE[h.level];
+          const dot   = LEVEL_STYLE[h.level].dotColor;
+          const surge = surgeMap[h.id];
+          const pulseColor = surge ? SURGE_PULSE[surge.alert_level] : '';
+          const sdiColor   = h.sdi_label ? SDI_COLOR[h.sdi_label] ?? '#6b7280' : '#6b7280';
+
           return (
             <div key={h.id} className="flex items-center justify-between">
               <div className="flex items-center gap-2">
+                {/* Status dot — pulses red/orange on surge */}
                 <div
                   className="w-1.5 h-1.5 rounded-full flex-shrink-0"
                   style={{
-                    background: style.dotColor,
-                    boxShadow: `0 0 4px ${style.dotColor}`,
+                    background: pulseColor || dot,
+                    boxShadow:  `0 0 ${pulseColor ? '6px' : '4px'} ${pulseColor || dot}`,
                   }}
                 />
                 <span
@@ -48,18 +69,24 @@ export default function DemandHotspots({ hotspots, totalTaxis }: Props) {
                   {h.name}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* SDI badge */}
+                {h.sdi !== undefined && (
+                  <span
+                    className="font-black tabular-nums"
+                    style={{ fontSize: 10, color: sdiColor }}
+                    title={`Supply-Demand Index: ${h.sdi}`}
+                  >
+                    {h.sdi_label}
+                  </span>
+                )}
+                {/* Taxi count */}
                 {h.taxi_count > 0 && (
-                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)' }}>
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)' }}>
                     {h.taxi_count}
                   </span>
                 )}
-                <span
-                  className="font-black tracking-wide"
-                  style={{ fontSize: 11, color: style.textColor }}
-                >
-                  {style.label}
-                </span>
               </div>
             </div>
           );

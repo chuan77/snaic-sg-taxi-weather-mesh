@@ -53,13 +53,15 @@ function heatColor(t: number): string {
 // Precomputed colormap string lookup (256 entries)
 const COLORMAP = Array.from({ length: 256 }, (_, i) => heatColor(i / 255));
 
-interface Props { taxis: TaxiPoint[]; }
+interface Props { taxis: TaxiPoint[]; invert?: boolean; }
 
-export default function DemandHeatLayer({ taxis }: Props): null {
+export default function DemandHeatLayer({ taxis, invert = false }: Props): null {
   const map = useMap();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const blurredRef = useRef<Float32Array>(new Float32Array(GRID_H * GRID_W));
   const maxRef = useRef(0);
+  const invertRef = useRef(invert);
+  invertRef.current = invert;
 
   // Recompute density grid + blur only when taxi data changes
   useEffect(() => {
@@ -105,13 +107,24 @@ export default function DemandHeatLayer({ taxis }: Props): null {
       if (swY + pxH < 0 || swY - pxH > size.y) continue; // cull off-screen rows
 
       for (let gx = 0; gx < GRID_W; gx++) {
-        const t = blurred[gy * GRID_W + gx] / max;
-        if (t < THRESHOLD) continue;
-
         const swX = ref0.x + gx * pxW;
         if (swX + pxW < 0 || swX > size.x) continue; // cull off-screen cols
 
-        const tNorm = (t - THRESHOLD) / (1 - THRESHOLD);
+        const raw = blurred[gy * GRID_W + gx];
+        let tNorm: number;
+
+        if (invertRef.current) {
+          // Supply gap: only render land cells (blurred > 0) where supply is low
+          if (raw === 0) continue;
+          const t = raw / max;
+          tNorm = Math.min(1, Math.max(0, (1 - t - THRESHOLD) / (1 - THRESHOLD)));
+          if (tNorm <= 0) continue;
+        } else {
+          const t = raw / max;
+          if (t < THRESHOLD) continue;
+          tNorm = (t - THRESHOLD) / (1 - THRESHOLD);
+        }
+
         ctx.fillStyle = COLORMAP[Math.min(255, Math.floor(tNorm * 255))];
         ctx.fillRect(swX, swY - pxH, pxW + 0.5, pxH + 0.5); // +0.5 closes seams
       }
@@ -141,6 +154,7 @@ export default function DemandHeatLayer({ taxis }: Props): null {
   }, [map, draw]);
 
   useEffect(() => { draw(); }, [taxis, draw]);
+  useEffect(() => { draw(); }, [invert, draw]);
 
   return null;
 }

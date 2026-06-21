@@ -30,8 +30,46 @@ export interface HotspotEntry {
   name: string;
   level: 'high' | 'medium' | 'low';
   taxi_count: number;
+  sdi: number;
+  sdi_label: string;
   lat: number;
   lng: number;
+}
+
+export interface SurgeZone {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  nearest_area: string;
+  forecast: string;
+  intensity: string;
+  surge_score: number;
+  alert_level: 'critical' | 'high' | 'moderate' | 'low';
+  valid_period_start: string;
+}
+
+export interface SurgeData {
+  updated_at: string;
+  alert_active: boolean;
+  alert_message: string;
+  zones: SurgeZone[];
+}
+
+export interface ClusterEntry {
+  id: string;
+  name: string;
+  centroid_lat: number;
+  centroid_lng: number;
+  count: number;
+  radius_km: number;
+}
+
+export interface ClustersData {
+  updated_at: string;
+  snapshot_timestamp: string;
+  cluster_count: number;
+  clusters: ClusterEntry[];
 }
 
 export interface HotspotsData {
