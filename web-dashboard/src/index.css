@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Base ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Barlow Semi Condensed', 'Inter', system-ui, sans-serif;
+  background: #0a0e14;
+  overflow: hidden;
+  color: white;
+}
+
+/* ─── Leaflet overrides ─────────────────────────────────────────────────────── */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #0a0e14;
+}
+
+.leaflet-control-attribution {
+  background: rgba(0, 0, 0, 0.55) !important;
+  color: rgba(255,255,255,0.3) !important;
+  font-size: 9px !important;
+}
+.leaflet-control-attribution a { color: rgba(255,255,255,0.4) !important; }
+
+/* ─── Glass panel ────────────────────────────────────────────────────────────── */
+.glass {
+  background: rgba(0, 8, 20, 0.80);
+  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+}
+
+/* ─── Leaflet popup ─────────────────────────────────────────────────────────── */
+.leaflet-popup-content-wrapper {
+  background: rgba(2, 10, 25, 0.95) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 8px !important;
+  color: white !important;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.7) !important;
+}
+.leaflet-popup-tip-container { display: none; }
+.leaflet-popup-content { margin: 10px 14px !important; }
+
+/* ─── Weather mesh cells ─────────────────────────────────────────────────────── */
+.wx-storm {
+  animation: stormPulse 2.6s ease-in-out infinite;
+}
+@keyframes stormPulse {
+  0%, 100% { opacity: 0.65; }
+  50%       { opacity: 1.00; }
+}
+
+.wx-heavy {
+  animation: heavyPulse 3.5s ease-in-out infinite;
+}
+@keyframes heavyPulse {
+  0%, 100% { opacity: 0.55; }
+  50%       { opacity: 0.85; }
+}
+
+/* ─── Surge marker ───────────────────────────────────────────────────────────── */
+.surge-marker {
+  background: rgba(236, 72, 153, 0.90);
+  border: 1px solid rgba(244, 114, 182, 0.85);
+  border-radius: 18px;
+  padding: 5px 14px;
+  color: white;
+  font-family: 'Barlow Semi Condensed', sans-serif;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  box-shadow: 0 0 10px rgba(236, 72, 153, 0.6), 0 0 28px rgba(236, 72, 153, 0.22);
+  animation: surgePulse 2.4s ease-in-out infinite;
+  cursor: pointer;
+  user-select: none;
+}
+@keyframes surgePulse {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(236, 72, 153, 0.6), 0 0 28px rgba(236, 72, 153, 0.22);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(236, 72, 153, 0.95), 0 0 50px rgba(236, 72, 153, 0.42);
+    transform: scale(1.06);
+  }
+}
+
+/* ─── Map area labels ────────────────────────────────────────────────────────── */
+.map-label {
+  color: rgba(255, 255, 255, 0.28);
+  font-family: 'Barlow Semi Condensed', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+}
+.map-label-main {
+  font-size: 22px;
+  letter-spacing: 6px;
+  color: rgba(255, 255, 255, 0.08);
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 2px; }
