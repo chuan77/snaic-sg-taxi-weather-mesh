@@ -11,6 +11,7 @@ import StatusKey from './components/StatusKey';
 import NowcastTimeline from './components/NowcastTimeline';
 import DemandHotspots from './components/DemandHotspots';
 import StatsPanel from './components/StatsPanel';
+import AlertsPanel from './components/AlertsPanel';
 import BottomNav from './components/BottomNav';
 
 export default function App() {
@@ -69,19 +70,23 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Bottom floating panels (above nav bar) ────────────────────────── */}
-      <div
-        className="absolute left-3 right-3 flex gap-2.5"
-        style={{ bottom: '60px', zIndex: 1001 }}
-      >
-        <NowcastTimeline steps={nowcast.timeline} validPeriodText={nowcast.valid_period.text} />
-        <DemandHotspots
-          hotspots={hotspotsData.hotspots}
-          totalTaxis={hotspotsData.total_taxis_online}
-          surgeZones={surgeData.zones}
-        />
-        <StatsPanel totalTaxis={hotspotsData.total_taxis_online} regions={nowcast.regions} />
-      </div>
+      {/* ── Bottom floating panels / Alerts page ─────────────────────────── */}
+      {activeTab === 'alerts' ? (
+        <AlertsPanel surge={surgeData} nowcastAlert={nowcast.alert} />
+      ) : (
+        <div
+          className="absolute left-3 right-3 flex gap-2.5"
+          style={{ bottom: '60px', zIndex: 1001 }}
+        >
+          <NowcastTimeline steps={nowcast.timeline} validPeriodText={nowcast.valid_period.text} />
+          <DemandHotspots
+            hotspots={hotspotsData.hotspots}
+            totalTaxis={hotspotsData.total_taxis_online}
+            surgeZones={surgeData.zones}
+          />
+          <StatsPanel totalTaxis={hotspotsData.total_taxis_online} regions={nowcast.regions} />
+        </div>
+      )}
 
       {/* ── Bottom nav bar ────────────────────────────────────────────────── */}
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
