@@ -21,3 +21,7 @@ dev = [
     "pytest>=8.0.0",
     "requests-mock>=1.11.0",
 ]
+
+# Append this to the bottom of pyproject.toml
+[tool.dagster]
+module_name = "sg_transit_weather_mesh"

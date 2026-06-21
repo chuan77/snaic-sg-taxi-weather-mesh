@@ -1,9 +1,37 @@
 # tests/test_ingestion.py
 import pytest
 import requests_mock
+import dlt
 from dlt.extract.exceptions import ResourceExtractionError
 from sg_transit_weather_mesh.utils import load_config
-from sg_transit_weather_mesh.assets.ingestion import sg_gov_source
+from sg_transit_weather_mesh.assets.ingestion import sg_gov_source, ingest_sg_raw_data
+
+MOCK_TAXI_RESPONSE = {
+    "type": "FeatureCollection",
+    "features": [{
+        "type": "Feature",
+        "geometry": {
+            "type": "MultiPoint",
+            "coordinates": [[103.8198, 1.3521]]
+        },
+        "properties": {
+            "timestamp": "2026-06-21T08:00:00+08:00",
+            "taxi_count": 1,
+            "api_info": {"status": "healthy"}
+        }
+    }]
+}
+
+MOCK_WEATHER_RESPONSE = {
+    "area_metadata": [
+        {"name": "Bishan", "label_location": {"latitude": 1.350772, "longitude": 103.839}}
+    ],
+    "items": [{
+        "timestamp": "2026-06-21T08:00:00+08:00",
+        "forecasts": [{"area": "Bishan", "forecast": "Partly Cloudy (Day)"}]
+    }],
+    "api_info": {"status": "healthy"}
+}
 
 def test_config_layer_loading():
     """Verifies that the YAML parsing utility correctly extracts configuration fields."""
@@ -14,36 +42,69 @@ def test_config_layer_loading():
     assert config["api"]["key"].startswith("v2:")
 
 def test_api_ingestion_contract_success():
-    """Verifies dlt resource extraction rules handle mock API streams."""
+    """Verifies taxi_availability yields one flat row per coordinate with timestamp, lat, lon."""
     config = load_config()
     base_url = config["api"]["base_url"]
 
-    mock_taxi_response = {
-        "data": {
-            "taxi_availability": [
-                {"latitude": 1.3521, "longitude": 103.8198, "taxi_id": "TAXI-TEST-99"}
-            ]
-        }
+    with requests_mock.Mocker() as mock:
+        mock.get(f"{base_url}/transport/taxi-availability", json=MOCK_TAXI_RESPONSE)
+        mock.get(f"{base_url}/environment/2-hour-weather-forecast", json=MOCK_WEATHER_RESPONSE)
+
+        source = sg_gov_source()
+        taxi_resource = source.resources["taxi_availability"]
+        raw_items = list(taxi_resource)
+
+        assert len(raw_items) == 1
+        record = raw_items[0]
+        assert record["latitude"] == 1.3521
+        assert record["longitude"] == 103.8198
+        assert record["timestamp"] == "2026-06-21T08:00:00+08:00"
+
+def test_weather_resource_yields_flat_rows_with_area_coordinates():
+    """Verifies weather_forecast joins forecasts with area_metadata and yields one row per area."""
+    config = load_config()
+    base_url = config["api"]["base_url"]
+
+    with requests_mock.Mocker() as mock:
+        mock.get(f"{base_url}/transport/taxi-availability", json=MOCK_TAXI_RESPONSE)
+        mock.get(f"{base_url}/environment/2-hour-weather-forecast", json=MOCK_WEATHER_RESPONSE)
+
+        source = sg_gov_source()
+        weather_resource = source.resources["weather_forecast"]
+        raw_items = list(weather_resource)
+
+        assert len(raw_items) == 1
+        record = raw_items[0]
+        assert record["area"] == "Bishan"
+        assert record["forecast"] == "Partly Cloudy (Day)"
+        assert record["latitude"] == 1.350772
+        assert record["longitude"] == 103.839
+        assert record["timestamp"] == "2026-06-21T08:00:00+08:00"
+
+def test_multiple_coordinates_yield_multiple_taxi_rows():
+    """Verifies that a response with N coordinates produces exactly N ingested rows."""
+    config = load_config()
+    base_url = config["api"]["base_url"]
+
+    multi_coord_response = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {
+                "type": "MultiPoint",
+                "coordinates": [[103.82, 1.35], [103.83, 1.36], [103.84, 1.37]]
+            },
+            "properties": {"timestamp": "2026-06-21T08:00:00+08:00", "taxi_count": 3, "api_info": {"status": "healthy"}}
+        }]
     }
 
     with requests_mock.Mocker() as mock:
-        mock.get(f"{base_url}/transport/taxi-availability", json=mock_taxi_response)
-        mock.get(f"{base_url}/two-hr-forecast", json={"data": {"items": []}})
+        mock.get(f"{base_url}/transport/taxi-availability", json=multi_coord_response)
+        mock.get(f"{base_url}/environment/2-hour-weather-forecast", json=MOCK_WEATHER_RESPONSE)
 
-        # 1. Instantiate the dlt source instance object
         source = sg_gov_source()
-        
-        # 2. Extract the actual DltResource object by key lookup from the source map
-        taxi_resource = source.resources["taxi_availability"]
-        
-        # 3. Read raw entries directly using dlt's explicit data-iterator property
-        raw_items = list(taxi_resource)
-
-        # 4. Assert against the returned dictionary payload structural schema
-        assert len(raw_items) == 1
-        extracted_payload = raw_items[0]
-        assert "taxi_availability" in extracted_payload
-        assert extracted_payload["taxi_availability"][0]["taxi_id"] == "TAXI-TEST-99"
+        raw_items = list(source.resources["taxi_availability"])
+        assert len(raw_items) == 3
 
 def test_api_ingestion_contract_failure():
     """Ensures our ingestion layers flag errors if the API throws a 500 error."""
@@ -52,11 +113,50 @@ def test_api_ingestion_contract_failure():
 
     with requests_mock.Mocker() as mock:
         mock.get(f"{base_url}/transport/taxi-availability", status_code=500)
-        
-        # Instantiate the lazy source map configuration
+
         source = sg_gov_source()
         taxi_resource = source.resources["taxi_availability"]
-        
-        # The exception triggers exactly when evaluating the resource iterator
+
         with pytest.raises(ResourceExtractionError):
             list(taxi_resource)
+
+def test_pipeline_rejects_credentials_kwarg():
+    """Regression: dlt.pipeline() does not accept credentials; it belongs on the destination factory."""
+    with pytest.raises(TypeError, match="credentials"):
+        dlt.pipeline(
+            pipeline_name="test",
+            destination="duckdb",
+            credentials="some/path.duckdb",
+        )
+
+def test_pipeline_construction_accepts_valid_args(tmp_path):
+    """Ensures dlt.pipeline() is called with a destination object carrying credentials, not a bare kwarg."""
+    db_path = str(tmp_path / "warehouse.duckdb")
+    pipeline = dlt.pipeline(
+        pipeline_name="sg_transport_weather",
+        destination=dlt.destinations.duckdb(credentials=db_path),
+        dataset_name="raw",
+    )
+    assert pipeline.pipeline_name == "sg_transport_weather"
+    assert pipeline.dataset_name == "raw"
+
+def test_ingest_asset_runs_end_to_end(tmp_path, monkeypatch):
+    """Smoke-tests the full Dagster asset: pipeline construction and run against a temp DuckDB."""
+    config = load_config()
+    base_url = config["api"]["base_url"]
+
+    db_path = str(tmp_path / "warehouse.duckdb")
+    original_pipeline = dlt.pipeline
+
+    def _pipeline_redirected_to_tmp(**kwargs):
+        kwargs["destination"] = dlt.destinations.duckdb(credentials=db_path)
+        return original_pipeline(**kwargs)
+
+    monkeypatch.setattr(dlt, "pipeline", _pipeline_redirected_to_tmp)
+
+    with requests_mock.Mocker() as mock:
+        mock.get(f"{base_url}/transport/taxi-availability", json=MOCK_TAXI_RESPONSE)
+        mock.get(f"{base_url}/environment/2-hour-weather-forecast", json=MOCK_WEATHER_RESPONSE)
+        result = ingest_sg_raw_data()
+
+    assert result is not None

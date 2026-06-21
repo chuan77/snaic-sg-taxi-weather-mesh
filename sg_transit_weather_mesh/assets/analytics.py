@@ -13,14 +13,13 @@ def analytics_taxi_weather_mart(ingest_sg_raw_data): # 👈 FIXED: Added the arg
     
     query = """
         CREATE SCHEMA IF NOT EXISTS mart;
-        
+
         CREATE OR REPLACE TABLE mart.fct_taxi_weather_trends AS
-        SELECT 
+        SELECT
             DATE_TRUNC('hour', CAST(t.timestamp AS TIMESTAMP)) AS event_hour,
             ROUND(t.latitude, 2) AS grid_lat,
             ROUND(t.longitude, 2) AS grid_lon,
-            COUNT(t.taxi_id) AS available_taxis_count,
-            AVG(w.temperature) AS avg_regional_temperature,
+            COUNT(*) AS available_taxis_count,
             MAX(w.forecast) AS prominent_weather_condition
         FROM raw.taxi_availability AS t
         LEFT JOIN raw.weather_forecast AS w
