@@ -37,7 +37,7 @@ export default function App() {
       >
         <NowcastTimeline steps={nowcast.timeline} validPeriodText={nowcast.valid_period.text} />
         <DemandHotspots hotspots={hotspotsData.hotspots} totalTaxis={hotspotsData.total_taxis_online} />
-        <StatsPanel />
+        <StatsPanel totalTaxis={hotspotsData.total_taxis_online} regions={nowcast.regions} />
       </div>
 
       {/* ── Bottom nav bar ────────────────────────────────────────────────── */}

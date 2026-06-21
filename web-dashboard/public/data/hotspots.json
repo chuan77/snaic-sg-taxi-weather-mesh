@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-06-21T14:20:08.038376+08:00",
-  "total_taxis_online": 2406,
-  "snapshot_timestamp": "2026-06-21 14:19:58+08:00",
+  "updated_at": "2026-06-21T14:25:06.524570+08:00",
+  "total_taxis_online": 2368,
+  "snapshot_timestamp": "2026-06-21 14:24:58+08:00",
   "hotspots": [
     {
       "id": "h1",
       "name": "Marina Bay / CBD",
       "level": "medium",
-      "taxi_count": 45,
+      "taxi_count": 43,
       "lat": 1.2897,
       "lng": 103.8501
     },
@@ -23,7 +23,7 @@
       "id": "h3",
       "name": "Orchard Road",
       "level": "medium",
-      "taxi_count": 43,
+      "taxi_count": 44,
       "lat": 1.3048,
       "lng": 103.8318
     },
@@ -31,7 +31,7 @@
       "id": "h4",
       "name": "Jurong East",
       "level": "low",
-      "taxi_count": 17,
+      "taxi_count": 18,
       "lat": 1.333,
       "lng": 103.7436
     },
@@ -39,7 +39,7 @@
       "id": "h5",
       "name": "Woodlands",
       "level": "low",
-      "taxi_count": 29,
+      "taxi_count": 26,
       "lat": 1.4382,
       "lng": 103.7891
     },
@@ -47,7 +47,7 @@
       "id": "h6",
       "name": "Tampines",
       "level": "high",
-      "taxi_count": 47,
+      "taxi_count": 45,
       "lat": 1.353,
       "lng": 103.9434
     }
