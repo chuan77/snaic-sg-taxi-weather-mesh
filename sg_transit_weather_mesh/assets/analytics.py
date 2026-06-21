@@ -4,6 +4,7 @@ import math
 import duckdb
 import numpy as np
 from sklearn.cluster import DBSCAN
+from sklearn.metrics import silhouette_score
 from datetime import datetime
 from pathlib import Path
 from dagster import asset, Output, AssetIn
@@ -267,6 +268,57 @@ def _name_cluster(centroid_lat: float, centroid_lng: float, hotspot_zones: list[
     prompt = f"Singapore coordinates: {centroid_lat:.4f}N, {centroid_lng:.4f}E"
     name = ask_llm(_CLUSTER_SYS, prompt)
     return name if name else f"Zone {centroid_lat:.3f},{centroid_lng:.3f}"
+
+
+# eps values in haversine radians: 1/6371 per km → range covers ~1.0–3.2 km
+_EPS_CANDIDATES = [0.00016, 0.0002, 0.0003, 0.0004, 0.0005]
+
+
+def _best_dbscan(
+    coords_rad: np.ndarray, min_samples: int = 10
+) -> tuple[np.ndarray | None, int, float | None]:
+    """
+    Sweep eps candidates and return (labels, n_clusters, silhouette_score) for the
+    run that produces ≥2 valid clusters with the highest silhouette score.
+    Falls back to the run with the most clusters (even if < 2) when no eps qualifies.
+    Returns (None, 0, None) if coords_rad is empty.
+    """
+    if len(coords_rad) == 0:
+        return None, 0, None
+
+    best_labels: np.ndarray | None = None
+    best_score = -2.0
+    best_n = 0
+    fallback_labels: np.ndarray | None = None
+    fallback_n = 0
+
+    for eps in _EPS_CANDIDATES:
+        labels = DBSCAN(
+            eps=eps, min_samples=min_samples,
+            algorithm="ball_tree", metric="haversine",
+        ).fit_predict(coords_rad)
+
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+
+        if n_clusters < 2:
+            if n_clusters > fallback_n:
+                fallback_labels = labels
+                fallback_n = n_clusters
+            continue
+
+        mask = labels != -1
+        if mask.sum() < 2:
+            continue
+        score = float(silhouette_score(coords_rad[mask], labels[mask], metric="haversine"))
+
+        if score > best_score:
+            best_score = score
+            best_labels = labels
+            best_n = n_clusters
+
+    if best_labels is not None:
+        return best_labels, best_n, best_score
+    return fallback_labels, fallback_n, None
 
 
 def _fmt_display_time(dt: datetime) -> str:
@@ -659,42 +711,48 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     )
 
     clusters: list[dict] = []
+    sil_score: float | None = None
     if len(coords) >= 20:
-        # eps is in radians for haversine metric: 2 km / 6371 km ≈ 0.000314
-        db = DBSCAN(eps=0.0003, min_samples=10, algorithm="ball_tree", metric="haversine").fit(
-            np.radians(coords)
-        )
-        for label in sorted(set(db.labels_)):
-            if label == -1:
-                continue
-            mask     = db.labels_ == label
-            pts      = coords[mask]
-            centroid = pts.mean(axis=0)
-            radius   = max(
-                (_dist_km(p[0], p[1], float(centroid[0]), float(centroid[1])) for p in pts),
-                default=0.0,
-            )
-            name = _name_cluster(float(centroid[0]), float(centroid[1]), HOTSPOT_ZONES)
-            clusters.append({
-                "id":           f"c{label}",
-                "name":         name,
-                "centroid_lat": round(float(centroid[0]), 4),
-                "centroid_lng": round(float(centroid[1]), 4),
-                "count":        int(mask.sum()),
-                "radius_km":    round(radius, 2),
-            })
-        clusters.sort(key=lambda c: c["count"], reverse=True)
+        coords_rad = np.radians(coords)
+        labels, _n_clusters, sil_score = _best_dbscan(coords_rad)
+
+        if labels is not None:
+            for label in sorted(set(labels)):
+                if label == -1:
+                    continue
+                mask     = labels == label
+                pts      = coords[mask]
+                centroid = pts.mean(axis=0)
+                radius   = max(
+                    (_dist_km(p[0], p[1], float(centroid[0]), float(centroid[1])) for p in pts),
+                    default=0.0,
+                )
+                name = _name_cluster(float(centroid[0]), float(centroid[1]), HOTSPOT_ZONES)
+                clusters.append({
+                    "id":           f"c{label}",
+                    "name":         name,
+                    "centroid_lat": round(float(centroid[0]), 4),
+                    "centroid_lng": round(float(centroid[1]), 4),
+                    "count":        int(mask.sum()),
+                    "radius_km":    round(radius, 2),
+                })
+            clusters.sort(key=lambda c: c["count"], reverse=True)
 
     payload = {
-        "updated_at":       datetime.now().astimezone().isoformat(),
+        "updated_at":         datetime.now().astimezone().isoformat(),
         "snapshot_timestamp": str(snapshot_ts) if snapshot_ts else "",
-        "cluster_count":    len(clusters),
-        "clusters":         clusters,
+        "cluster_count":      len(clusters),
+        "silhouette_score":   round(sil_score, 4) if sil_score is not None else None,
+        "clusters":           clusters,
     }
     _CLUSTERS_JSON.parent.mkdir(parents=True, exist_ok=True)
     _CLUSTERS_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
     return Output(
         value=None,
-        metadata={"cluster_count": len(clusters), "clusters_path": str(_CLUSTERS_JSON)},
+        metadata={
+            "cluster_count":    len(clusters),
+            "silhouette_score": sil_score if sil_score is not None else "n/a",
+            "clusters_path":    str(_CLUSTERS_JSON),
+        },
     )

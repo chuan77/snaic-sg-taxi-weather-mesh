@@ -69,6 +69,7 @@ export interface ClustersData {
   updated_at: string;
   snapshot_timestamp: string;
   cluster_count: number;
+  silhouette_score: number | null;
   clusters: ClusterEntry[];
 }
 
