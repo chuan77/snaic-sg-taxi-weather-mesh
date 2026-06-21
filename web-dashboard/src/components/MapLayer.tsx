@@ -18,6 +18,7 @@ interface Props {
   clusters?: ClusterEntry[];
   mode?: 'map' | 'heatmap';
   invertHeatmap?: boolean;
+  showHeatmap?: boolean;
 }
 
 export default function MapLayer({
@@ -26,6 +27,7 @@ export default function MapLayer({
   clusters = [],
   mode = 'map',
   invertHeatmap = false,
+  showHeatmap = true,
 }: Props) {
   return (
     <MapContainer
@@ -44,7 +46,7 @@ export default function MapLayer({
       {mode === 'map' && <TaxiDotLayer taxis={taxis} />}
 
       {/* Heatmap view: density or inverse supply gap */}
-      {mode === 'heatmap' && <DemandHeatLayer taxis={taxis} invert={invertHeatmap} />}
+      {mode === 'heatmap' && showHeatmap && <DemandHeatLayer taxis={taxis} invert={invertHeatmap} />}
 
       {/* DBSCAN cluster circles — visible in both modes */}
       <ClusterOverlay clusters={clusters} />

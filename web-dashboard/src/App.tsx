@@ -16,6 +16,7 @@ import BottomNav from './components/BottomNav';
 export default function App() {
   const [activeTab, setActiveTab] = useState('map');
   const [invertHeatmap, setInvertHeatmap] = useState(false);
+  const [showHeatmap, setShowHeatmap] = useState(true);
 
   const { data: nowcast } = useNowcast();
   const { data: hotspotsData } = useHotspots();
@@ -24,6 +25,11 @@ export default function App() {
   const { data: clustersData } = useClusters();
 
   const mapMode = activeTab === 'demand' ? 'heatmap' : 'map';
+
+  function handleTabChange(id: string) {
+    if (id === 'demand') setShowHeatmap(true);
+    setActiveTab(id);
+  }
 
   return (
     <div className="fixed inset-0 bg-[#0a0e14] overflow-hidden">
@@ -36,6 +42,7 @@ export default function App() {
           clusters={clustersData.clusters}
           mode={mapMode}
           invertHeatmap={invertHeatmap}
+          showHeatmap={showHeatmap}
         />
       </div>
 
@@ -43,17 +50,37 @@ export default function App() {
       <HeaderOverlay alert={nowcast.alert} surge={surgeData} />
 
       {/* ── Top-right: legend (switches content based on active tab) ──────── */}
-      <Legend mode={mapMode} />
+      <Legend mode={mapMode} invert={invertHeatmap} />
 
       {/* ── Right: taxi status key ────────────────────────────────────────── */}
       <StatusKey />
 
-      {/* ── Heatmap toggle — only visible in demand tab ───────────────────── */}
+      {/* ── Heatmap controls — only visible in demand tab ─────────────────── */}
       {activeTab === 'demand' && (
-        <div className="absolute" style={{ top: '12px', right: '52px', zIndex: 1100 }}>
+        <div
+          className="absolute flex gap-2"
+          style={{ top: '12px', right: '52px', zIndex: 1100 }}
+        >
+          {/* Visibility toggle */}
+          <button
+            onClick={() => setShowHeatmap(v => !v)}
+            className="px-3 py-1.5 rounded text-xs font-semibold tracking-wide transition-colors"
+            style={{
+              background: showHeatmap
+                ? 'rgba(34,211,238,0.20)'
+                : 'rgba(100,116,139,0.40)',
+              color: showHeatmap ? '#67e8f9' : 'rgba(255,255,255,0.55)',
+              border: `1px solid ${showHeatmap ? 'rgba(34,211,238,0.40)' : 'rgba(100,116,139,0.40)'}`,
+              backdropFilter: 'blur(6px)',
+            }}
+          >
+            {showHeatmap ? 'Hide Heatmap' : 'Show Heatmap'}
+          </button>
+
+          {/* Invert toggle — dimmed when layer is hidden */}
           <button
             onClick={() => setInvertHeatmap(v => !v)}
-            className="px-3 py-1.5 rounded text-xs font-semibold tracking-wide transition-colors"
+            className={`px-3 py-1.5 rounded text-xs font-semibold tracking-wide transition-colors ${!showHeatmap ? 'opacity-40 pointer-events-none' : ''}`}
             style={{
               background: invertHeatmap ? 'rgba(239,68,68,0.85)' : 'rgba(34,197,94,0.85)',
               color: '#fff',
@@ -81,7 +108,7 @@ export default function App() {
       </div>
 
       {/* ── Bottom nav bar ────────────────────────────────────────────────── */}
-      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+      <BottomNav activeTab={activeTab} onTabChange={handleTabChange} />
     </div>
   );
 }
