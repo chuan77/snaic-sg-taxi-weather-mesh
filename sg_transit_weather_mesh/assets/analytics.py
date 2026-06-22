@@ -1,8 +1,11 @@
 # sg_transit_weather_mesh/assets/analytics.py
 import json
+import json as _json
 import math
 import duckdb
 import numpy as np
+from shapely.geometry import shape, Point
+from shapely.strtree import STRtree
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_score
 from sklearn.ensemble import GradientBoostingRegressor
@@ -20,6 +23,7 @@ _CLUSTERS_JSON    = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "clust
 _FORECAST24H_JSON   = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast24h.json"
 _FORECAST_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast.json"
 _CHAT_CONTEXT_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "chat_context.json"
+_SUBZONES_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "subzones.json"
 
 # NEA official forecast string → WeatherIntensity level used by the frontend
 FORECAST_INTENSITY: dict[str, str] = {
@@ -264,11 +268,82 @@ def _build_surge_alert(zone_surges: list[dict]) -> str:
     return f"{intensity_text} near {worst['name']} — expect surge demand. Position early."
 
 
-def _name_cluster(centroid_lat: float, centroid_lng: float, hotspot_zones: list[dict]) -> str:
-    """Return a name for a taxi cluster: fixed zone name if nearby, else LLM lookup."""
+def _load_subzone_shapes(conn) -> tuple:
+    """Load MP2019 subzone polygons from DuckDB; build STRtree spatial index.
+    Returns (tree, meta_list, geoms_list) — all parallel lists. Returns (None, [], []) on failure.
+    """
+    try:
+        rows = conn.execute("""
+            SELECT subzone_name, planning_area, region, geometry_json
+            FROM raw.sg_subzone_boundaries
+            ORDER BY subzone_code
+        """).fetchall()
+    except Exception:
+        return None, [], []
+
+    meta, geoms = [], []
+    for subzone_name, planning_area, region, geom_json in rows:
+        try:
+            geom = shape(_json.loads(geom_json))
+        except Exception:
+            continue
+        meta.append({
+            "subzone":       subzone_name.title(),
+            "planning_area": planning_area.title(),
+            "region":        region.title(),
+        })
+        geoms.append(geom)
+
+    if not geoms:
+        return None, [], []
+
+    return STRtree(geoms), meta, geoms
+
+
+def _subzone_for_point(
+    lat: float,
+    lng: float,
+    tree,
+    meta: list[dict],
+    geoms: list,
+) -> dict:
+    """Return subzone metadata for a WGS84 coordinate (Shapely point-in-polygon).
+    Falls back to nearest centroid for boundary/coast edge cases.
+    Returns {} if spatial data not loaded.
+    """
+    if tree is None:
+        return {}
+    pt = Point(lng, lat)  # Shapely: x=lng, y=lat
+    for idx in tree.query(pt):
+        if geoms[idx].contains(pt):
+            return meta[idx]
+    # Nearest centroid fallback
+    min_d = float("inf")
+    nearest: dict = {}
+    for i, geom in enumerate(geoms):
+        d = pt.distance(geom.centroid)
+        if d < min_d:
+            min_d = d
+            nearest = meta[i]
+    return nearest
+
+
+def _name_cluster(
+    centroid_lat: float,
+    centroid_lng: float,
+    hotspot_zones: list[dict],
+    sz_tree=None,
+    sz_meta: list | None = None,
+    sz_geoms: list | None = None,
+) -> str:
+    """Return a name for a taxi cluster: fixed zone → subzone lookup → LLM fallback."""
     for zone in hotspot_zones:
         if _dist_km(centroid_lat, centroid_lng, zone["lat"], zone["lng"]) <= 1.5:
             return zone["name"]
+    if sz_tree is not None:
+        result = _subzone_for_point(centroid_lat, centroid_lng, sz_tree, sz_meta or [], sz_geoms or [])
+        if result.get("planning_area"):
+            return result["planning_area"]
     prompt = f"Singapore coordinates: {centroid_lat:.4f}N, {centroid_lng:.4f}E"
     name = ask_llm(_CLUSTER_SYS, prompt)
     return name if name else f"Zone {centroid_lat:.3f},{centroid_lng:.3f}"
@@ -724,6 +799,12 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     finally:
         conn.close()
 
+    conn_sz = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        sz_tree, sz_meta, sz_geoms = _load_subzone_shapes(conn_sz)
+    finally:
+        conn_sz.close()
+
     coords = np.array(
         [[float(r[0]), float(r[1])] for r in rows if r[0] and r[1]], dtype=np.float64
     )
@@ -745,7 +826,10 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
                     (_dist_km(p[0], p[1], float(centroid[0]), float(centroid[1])) for p in pts),
                     default=0.0,
                 )
-                name = _name_cluster(float(centroid[0]), float(centroid[1]), HOTSPOT_ZONES)
+                name = _name_cluster(
+                    float(centroid[0]), float(centroid[1]), HOTSPOT_ZONES,
+                    sz_tree, sz_meta, sz_geoms,
+                )
                 clusters.append({
                     "id":           f"c{label}",
                     "name":         name,
@@ -1064,5 +1148,65 @@ def chat_context_export(
             "areas_count":       len(payload["areas"]),
             "hotspots_count":    len(payload["hotspots"]),
             "chat_context_path": str(_CHAT_CONTEXT_JSON),
+        },
+    )
+
+
+@asset(
+    ins={
+        "ingest_sg_raw_data":          AssetIn(),
+        "analytics_taxi_weather_mart": AssetIn(),
+    },
+    compute_kind="python",
+)
+def subzones_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
+    """Assigns each taxi to a URA planning area via point-in-polygon (MP2019 boundaries),
+    counts taxis per area, writes subzones.json."""
+
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        taxi_rows = conn.execute("""
+            SELECT latitude, longitude
+            FROM raw.taxi_availability
+            WHERE timestamp  = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+              AND latitude   IS NOT NULL AND longitude IS NOT NULL
+              AND latitude   BETWEEN 1.1 AND 1.5
+              AND longitude  BETWEEN 103.5 AND 104.1
+        """).fetchall()
+        sz_tree, sz_meta, sz_geoms = _load_subzone_shapes(conn)
+    finally:
+        conn.close()
+
+    area_counts: dict[str, dict] = {}
+    unassigned = 0
+    for lat, lng in taxi_rows:
+        result = _subzone_for_point(float(lat), float(lng), sz_tree, sz_meta, sz_geoms)
+        if not result:
+            unassigned += 1
+            continue
+        key = result["planning_area"]
+        if key not in area_counts:
+            area_counts[key] = {"name": key, "region": result["region"], "count": 0}
+        area_counts[key]["count"] += 1
+
+    planning_areas = sorted(area_counts.values(), key=lambda x: x["count"], reverse=True)
+
+    payload = {
+        "generated_at":   datetime.now().astimezone().isoformat(),
+        "total_assigned": sum(a["count"] for a in planning_areas),
+        "unassigned":     unassigned,
+        "planning_areas": planning_areas,
+    }
+
+    _SUBZONES_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _SUBZONES_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return Output(
+        value=None,
+        metadata={
+            "planning_areas_with_taxis": len(planning_areas),
+            "total_assigned":            payload["total_assigned"],
+            "unassigned":                unassigned,
+            "subzones_path":             str(_SUBZONES_JSON),
         },
     )

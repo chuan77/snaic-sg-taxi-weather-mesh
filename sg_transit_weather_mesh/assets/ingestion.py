@@ -19,6 +19,12 @@ _BASE_URL_V1 = config["api"]["base_url"]
 _WEATHER_V2_URL    = "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast"
 _WEATHER_24H_V2_URL = "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast"
 
+# URA Master Plan 2019 Subzone Boundaries (poll-download endpoint returns a presigned S3 URL)
+_MP2019_POLL_URL = (
+    "https://api-open.data.gov.sg/v1/public/api/datasets"
+    "/d_8594ae9ff96d0c708bc2af633048edfb/poll-download"
+)
+
 
 @dlt.source
 def sg_gov_source():
@@ -134,7 +140,52 @@ def sg_gov_source():
                     "forecast":         rdata.get("forecast", ""),
                 }
 
-    return taxi_availability, weather_forecast, weather_forecast_24hr
+    @dlt.resource(
+        name="sg_subzone_boundaries",
+        write_disposition="replace",
+        primary_key=["subzone_code"],
+    )
+    def sg_subzone_boundaries():
+        """URA Master Plan 2019 subzone polygon boundaries — static reference data.
+        Skips re-download if ≥300 rows already exist in DuckDB (data changes ~annually).
+        """
+        import json as _json
+        try:
+            conn = duckdb.connect(_DB_PATH, read_only=True)
+            try:
+                existing = conn.execute(
+                    "SELECT COUNT(*) FROM raw.sg_subzone_boundaries"
+                ).fetchone()[0]
+            finally:
+                conn.close()
+            if existing >= 300:
+                return
+        except Exception:
+            pass  # table not yet created — proceed with download
+
+        try:
+            poll = requests.get(_MP2019_POLL_URL, timeout=30)
+            poll.raise_for_status()
+            download_url = poll.json()["data"]["url"]
+            geojson_resp = requests.get(download_url, timeout=120)
+            geojson_resp.raise_for_status()
+            fc = geojson_resp.json()
+        except requests.exceptions.HTTPError:
+            return  # rate-limited or API error — skip silently, retry next run
+
+        for feature in fc.get("features", []):
+            props = feature.get("properties", {})
+            yield {
+                "subzone_code":  str(props.get("SUBZONE_C", "")),
+                "subzone_name":  str(props.get("SUBZONE_N", "")),
+                "planning_area": str(props.get("PLN_AREA_N", "")),
+                "region":        str(props.get("REGION_N", "")),
+                "ca_indicator":  str(props.get("CA_IND", "")),
+                "shape_area_m2": float(props.get("SHAPE.AREA") or 0.0),
+                "geometry_json": _json.dumps(feature.get("geometry", {})),
+            }
+
+    return taxi_availability, weather_forecast, weather_forecast_24hr, sg_subzone_boundaries
 
 
 @asset(compute_kind="dlt")

@@ -9,6 +9,7 @@ from sg_transit_weather_mesh.assets.ingestion import (
     ingest_sg_raw_data,
     _WEATHER_V2_URL,
     _WEATHER_24H_V2_URL,
+    _MP2019_POLL_URL,
 )
 import sg_transit_weather_mesh.assets.ingestion as ingestion_module
 
@@ -237,10 +238,16 @@ def test_ingest_asset_runs_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(dlt, "pipeline", _pipeline_redirected_to_tmp)
     monkeypatch.setattr(ingestion_module, "_DB_PATH", db_path)
 
+    _PRESIGNED_URL = "https://s3.example.com/mp2019.geojson"
+    _MOCK_MP2019_POLL = {"data": {"url": _PRESIGNED_URL}}
+    _MOCK_MP2019_GEOJSON = {"type": "FeatureCollection", "features": []}
+
     with requests_mock.Mocker() as mock:
         mock.get(f"{base_url}/transport/taxi-availability", json=MOCK_TAXI_RESPONSE)
         mock.get(_WEATHER_V2_URL, json=MOCK_WEATHER_RESPONSE_V2)
         mock.get(_WEATHER_24H_V2_URL, json=MOCK_WEATHER_24H_RESPONSE)
+        mock.get(_MP2019_POLL_URL, json=_MOCK_MP2019_POLL)
+        mock.get(_PRESIGNED_URL, json=_MOCK_MP2019_GEOJSON)
         result = ingest_sg_raw_data()
 
     assert result is not None

@@ -165,3 +165,16 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
 }
+
+export interface PlanningAreaEntry {
+  name: string;
+  region: string;
+  count: number;
+}
+
+export interface SubzonesData {
+  generated_at: string;
+  total_assigned: number;
+  unassigned: number;
+  planning_areas: PlanningAreaEntry[];
+}

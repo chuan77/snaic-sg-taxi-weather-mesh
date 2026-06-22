@@ -35,6 +35,7 @@ web-dashboard/public/data/clusters.json
 web-dashboard/public/data/forecast24h.json
 web-dashboard/public/data/forecast.json
 web-dashboard/public/data/chat_context.json
+web-dashboard/public/data/subzones.json
 
 # ==========================================
 # 🗄️ Relational Database & Warehouse Dumps
