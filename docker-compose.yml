@@ -15,7 +15,8 @@ services:
     models:
       - llm
     depends_on:
-      - mlflow
+      mlflow:
+        condition: service_healthy
 
   mlflow:
     build: .
@@ -27,6 +28,12 @@ services:
         --port 5050
         --workers 1
         --allowed-hosts "mlflow,mlflow:5050,localhost,localhost:5050"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     ports:
       - "5050:5050"
     volumes:

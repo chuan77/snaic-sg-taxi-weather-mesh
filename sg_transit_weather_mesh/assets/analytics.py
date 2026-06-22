@@ -12,6 +12,7 @@ from sklearn.ensemble import GradientBoostingRegressor
 from datetime import datetime, timedelta
 from pathlib import Path
 import mlflow
+import mlflow.sklearn
 from mlflow.entities import SpanType
 from dagster import asset, Output, AssetIn, get_dagster_logger
 from ..utils import ask_llm, get_mlflow_config, configure_mlflow_tracking
@@ -1169,7 +1170,6 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     # cannot override the global active experiment between Block 1 and here.
     if _experiment is not None:
         try:
-            import mlflow.sklearn
             with mlflow.start_run(
                 run_name=f"gbr_{datetime.now().strftime('%Y%m%dT%H%M%S')}",
                 experiment_id=_experiment.experiment_id,
