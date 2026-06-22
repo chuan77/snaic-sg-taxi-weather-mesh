@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { ClustersData } from '../types';
 
-const FALLBACK: ClustersData = { updated_at: '', snapshot_timestamp: '', cluster_count: 0, clusters: [] };
+const FALLBACK: ClustersData = { updated_at: '', snapshot_timestamp: '', cluster_count: 0, silhouette_score: null, clusters: [] };
 const POLL_MS = 300_000;
 
 export function useClusters() {
