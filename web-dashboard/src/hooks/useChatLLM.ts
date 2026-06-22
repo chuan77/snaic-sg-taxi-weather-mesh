@@ -120,7 +120,10 @@ export function useChatLLM() {
           stream: false,
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}${body ? ' — ' + body.slice(0, 200) : ''}`);
+      }
       const data = await res.json();
       const raw = data.choices?.[0]?.message;
       const reply: string =
