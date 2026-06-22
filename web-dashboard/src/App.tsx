@@ -95,7 +95,11 @@ export default function App() {
             forecastZones={forecastData.zones}
             planningAreas={subzonesData.planning_areas}
           />
-          <StatsPanel totalTaxis={hotspotsData.total_taxis_online} regions={nowcast.regions} />
+          <StatsPanel
+            totalTaxis={hotspotsData.total_taxis_online}
+            regions={nowcast.regions}
+            coverageScore={hotspotsData.fleet_coverage_score ?? null}
+          />
         </div>
       )}
 

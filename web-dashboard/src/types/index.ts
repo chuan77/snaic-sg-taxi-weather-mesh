@@ -30,6 +30,7 @@ export interface HotspotEntry {
   name: string;
   level: 'high' | 'medium' | 'low';
   taxi_count: number;
+  delta_count?: number | null;
   sdi: number;
   sdi_label: string;
   lat: number;
@@ -77,6 +78,7 @@ export interface HotspotsData {
   updated_at: string;
   total_taxis_online: number;
   snapshot_timestamp: string;
+  fleet_coverage_score?: number | null;
   hotspots: HotspotEntry[];
 }
 

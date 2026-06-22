@@ -116,6 +116,16 @@ export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [], 
                     {h.taxi_count}
                   </span>
                 )}
+                {/* T2-F3: Competition delta since last snapshot */}
+                {h.delta_count != null && h.delta_count !== 0 && (
+                  <span
+                    className="font-semibold tabular-nums"
+                    style={{ fontSize: 9, color: deltaColor(h.delta_count), opacity: 0.8 }}
+                    title={`Taxis since last snapshot: ${h.delta_count > 0 ? '+' : ''}${h.delta_count}`}
+                  >
+                    {h.delta_count > 0 ? `▲${h.delta_count}` : `▼${Math.abs(h.delta_count)}`}
+                  </span>
+                )}
                 {/* 30-min prediction chip */}
                 {fz && (
                   <span

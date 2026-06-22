@@ -5,6 +5,7 @@ const FALLBACK: HotspotsData = {
   updated_at: '',
   total_taxis_online: 0,
   snapshot_timestamp: '',
+  fleet_coverage_score: null,
   hotspots: [
     { id: 'h1', name: 'Marina Bay / CBD', level: 'high',   taxi_count: 0, lat: 1.2897, lng: 103.8501, sdi: 0, sdi_label: 'Shortage' },
     { id: 'h2', name: 'Changi Airport',   level: 'medium', taxi_count: 0, lat: 1.3592, lng: 103.9894, sdi: 0, sdi_label: 'Shortage' },

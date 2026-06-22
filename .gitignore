@@ -50,3 +50,7 @@ web-dashboard/public/data/subzones.json
 # Ignore your core centralized persistent DuckDB file engine
 data/*.duckdb
 data/*.duckdb.wal
+
+# MLflow tracking store and artifact root
+data/mlflow.db
+data/mlruns/

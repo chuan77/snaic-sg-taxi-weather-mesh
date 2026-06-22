@@ -11,8 +11,10 @@ from sklearn.metrics import silhouette_score
 from sklearn.ensemble import GradientBoostingRegressor
 from datetime import datetime, timedelta
 from pathlib import Path
+import mlflow
+from mlflow.entities import SpanType
 from dagster import asset, Output, AssetIn
-from ..utils import ask_llm
+from ..utils import ask_llm, get_mlflow_config, configure_mlflow_tracking
 
 _PROJECT_ROOT   = Path(__file__).parent.parent.parent
 _NOWCAST_JSON   = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "nowcast.json"
@@ -138,10 +140,15 @@ _ZONE_BASE_DEMAND: dict[str, float] = {
     "h5": 30.0,  # Woodlands
     "h6": 50.0,  # Tampines
 }
+_FORECAST_LAG = 6
+_FORECAST_HORIZON = 6
+
 _WEATHER_DEMAND_MULT: dict[str, float] = {
     "clear": 1.0, "drizzle": 1.3, "moderate": 1.7, "heavy": 2.2, "storm": 3.0,
 }
 _RUSH_HOURS = {7, 8, 17, 18, 19}
+_TOTAL_BASE_DEMAND = 330.0   # sum of all 6 _ZONE_BASE_DEMAND values
+_SDI_CAP = 1.5               # cap per-zone SDI to prevent one surplus masking shortages
 
 # LLM system prompts
 _SURGE_SYS = (
@@ -625,6 +632,24 @@ def hotspots_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         snapshot_ts = conn.execute(
             "SELECT MAX(timestamp) FROM raw.taxi_availability"
         ).fetchone()[0]
+        # T2-F3: fetch the two most recent distinct timestamps for competition delta
+        ts_rows = conn.execute("""
+            SELECT DISTINCT CAST(timestamp AS VARCHAR) AS ts
+            FROM raw.taxi_availability ORDER BY ts DESC LIMIT 2
+        """).fetchall()
+        prev_ts = ts_rows[1][0] if len(ts_rows) >= 2 else None
+        prev_counts: dict[str, int] = {}
+        if prev_ts is not None:
+            prev_taxi_rows = conn.execute("""
+                SELECT latitude, longitude
+                FROM raw.taxi_availability
+                WHERE CAST(timestamp AS VARCHAR) = ?
+                  AND latitude  IS NOT NULL AND longitude IS NOT NULL
+                  AND latitude  BETWEEN 1.1 AND 1.5
+                  AND longitude BETWEEN 103.5 AND 104.1
+            """, [prev_ts]).fetchall()
+            prev_zones = _count_taxis_per_zone(prev_taxi_rows, HOTSPOT_ZONES)
+            prev_counts = {z["id"]: z["taxi_count"] for z in prev_zones}
         # Fetch latest weather for SDI computation
         weather_rows = conn.execute("""
             SELECT area, forecast, latitude, longitude
@@ -658,22 +683,41 @@ def hotspots_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     for z in zones_ranked:
         intensity = _nearest_intensity(z)
         sdi, sdi_label = _compute_sdi(z["id"], z["taxi_count"], intensity, current_hour)
+        delta_count = (
+            z["taxi_count"] - prev_counts[z["id"]]
+            if prev_counts and z["id"] in prev_counts
+            else None
+        )
         hotspot_list.append({
-            "id":         z["id"],
-            "name":       z["name"],
-            "level":      z["level"],
-            "taxi_count": z["taxi_count"],
-            "sdi":        sdi,
-            "sdi_label":  sdi_label,
-            "lat":        z["lat"],
-            "lng":        z["lng"],
+            "id":          z["id"],
+            "name":        z["name"],
+            "level":       z["level"],
+            "taxi_count":  z["taxi_count"],
+            "delta_count": delta_count,
+            "sdi":         sdi,
+            "sdi_label":   sdi_label,
+            "lat":         z["lat"],
+            "lng":         z["lng"],
         })
 
+    # T2-F7: Fleet Coverage Score — demand-weighted average of capped per-zone SDIs
+    coverage_score: float | None = None
+    if hotspot_list:
+        coverage_score = round(
+            sum(
+                min(h["sdi"], _SDI_CAP) * _ZONE_BASE_DEMAND.get(h["id"], 0.0)
+                / _TOTAL_BASE_DEMAND
+                for h in hotspot_list
+            ),
+            3,
+        )
+
     payload = {
-        "updated_at":         datetime.now().astimezone().isoformat(),
-        "total_taxis_online": len(taxi_rows),
-        "snapshot_timestamp": str(snapshot_ts) if snapshot_ts else "",
-        "hotspots":           hotspot_list,
+        "updated_at":           datetime.now().astimezone().isoformat(),
+        "total_taxis_online":   len(taxi_rows),
+        "snapshot_timestamp":   str(snapshot_ts) if snapshot_ts else "",
+        "fleet_coverage_score": coverage_score,
+        "hotspots":             hotspot_list,
     }
 
     _HOTSPOTS_JSON.parent.mkdir(parents=True, exist_ok=True)
@@ -814,6 +858,27 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     if len(coords) >= 20:
         coords_rad = np.radians(coords)
         labels, _n_clusters, sil_score = _best_dbscan(coords_rad)
+
+        # ── MLflow experiment tracking ─────────────────────────────────────────
+        _mlflow_cfg = get_mlflow_config()
+        if _mlflow_cfg is not None and sil_score is not None:
+            try:
+                import mlflow
+                configure_mlflow_tracking(_mlflow_cfg)
+                mlflow.set_experiment(_mlflow_cfg["experiments"]["taxi_clusters"])
+                with mlflow.start_run(run_name=f"dbscan_{datetime.now().strftime('%Y%m%dT%H%M%S')}"):
+                    mlflow.log_params({
+                        "min_samples": 10, "metric": "haversine",
+                        "algorithm": "ball_tree", "coord_count": len(coords),
+                    })
+                    mlflow.log_metric("silhouette_score", round(sil_score, 4))
+                    mlflow.log_metric("n_clusters", _n_clusters)
+                    if labels is not None:
+                        mlflow.log_metric("noise_fraction",
+                            round(float((labels == -1).sum()) / len(labels), 4))
+                    mlflow.set_tag("pipeline", "taxi_clusters_export")
+            except Exception:
+                pass
 
         if labels is not None:
             for label in sorted(set(labels)):
@@ -969,6 +1034,68 @@ def weather_24hr_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     )
 
 
+@mlflow.trace(name="train_gbr_zone", span_type=SpanType.CHAIN)
+def _train_gbr_zone(
+    zone_id: str,
+    zone_name: str,
+    counts: list,
+    sufficient_data: bool,
+) -> dict:
+    """Train GBR for one hotspot zone. Traced as a CHAIN span per zone per pipeline run.
+
+    Returns a dict with:
+        zone_out  – the forecast entry for zones_out
+        model     – fitted GradientBoostingRegressor (or None when data is insufficient)
+        X_train   – training feature matrix (or None)
+        mae       – holdout MAE (or None)
+    """
+    current_count = counts[-1] if counts else 0
+    _fallback = {
+        "zone_out": {
+            "id": zone_id, "name": zone_name,
+            "current_count": current_count, "predicted_count": current_count, "delta": 0,
+        },
+        "model": None, "X_train": None, "mae": None,
+    }
+
+    if not sufficient_data or len(counts) < _FORECAST_LAG + _FORECAST_HORIZON + 1:
+        return _fallback
+
+    X_rows, y_rows = [], []
+    for i in range(_FORECAST_LAG, len(counts) - _FORECAST_HORIZON):
+        X_rows.append([counts[i - k] for k in range(1, _FORECAST_LAG + 1)])
+        y_rows.append(counts[i + _FORECAST_HORIZON])
+
+    if len(X_rows) < 5:
+        return _fallback
+
+    X = np.array(X_rows, dtype=float)
+    y = np.array(y_rows, dtype=float)
+    split = max(1, int(len(X) * 0.8))
+
+    model = GradientBoostingRegressor(n_estimators=50, max_depth=3, random_state=42)
+    model.fit(X[:split], y[:split])
+
+    mae: float | None = None
+    if len(X[split:]) > 0:
+        mae = float(np.mean(np.abs(model.predict(X[split:]) - y[split:])))
+
+    latest = np.array([[counts[-k] for k in range(1, _FORECAST_LAG + 1)]], dtype=float)
+    predicted_count = max(0, int(round(float(model.predict(latest)[0]))))
+
+    return {
+        "zone_out": {
+            "id": zone_id, "name": zone_name,
+            "current_count": current_count,
+            "predicted_count": predicted_count,
+            "delta": predicted_count - current_count,
+        },
+        "model": model,
+        "X_train": X[:split],
+        "mae": mae,
+    }
+
+
 @asset(
     ins={
         "ingest_sg_raw_data":          AssetIn(),
@@ -979,6 +1106,15 @@ def weather_24hr_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
 def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     """Trains a GradientBoostingRegressor per hotspot zone on rolling snapshot history,
     predicts taxi count 30 minutes ahead, writes forecast.json."""
+
+    # ── MLflow tracing entry-point: set URI + experiment before any @mlflow.trace spans fire ──
+    _mlflow_cfg = get_mlflow_config()
+    if _mlflow_cfg is not None:
+        try:
+            configure_mlflow_tracking(_mlflow_cfg)
+            mlflow.set_experiment(_mlflow_cfg["experiments"]["demand_forecast"])
+        except Exception:
+            pass
 
     conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
     try:
@@ -1014,55 +1150,44 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     generated_at = datetime.now().astimezone().isoformat()
     zones_out = []
     all_maes: list[float] = []
-    HORIZON = 6
-    LAG = 6
+    _last_model = None
+    _last_zone_X = None
 
     for z in HOTSPOT_ZONES:
-        counts = zone_counts[z["id"]]
-        current_count = counts[-1] if counts else 0
-
-        if not sufficient_data or len(counts) < LAG + HORIZON + 1:
-            zones_out.append({
-                "id": z["id"], "name": z["name"],
-                "current_count": current_count, "predicted_count": current_count, "delta": 0,
-            })
-            continue
-
-        X_rows, y_rows = [], []
-        for i in range(LAG, len(counts) - HORIZON):
-            X_rows.append([counts[i - k] for k in range(1, LAG + 1)])
-            y_rows.append(counts[i + HORIZON])
-
-        if len(X_rows) < 5:
-            zones_out.append({
-                "id": z["id"], "name": z["name"],
-                "current_count": current_count, "predicted_count": current_count, "delta": 0,
-            })
-            continue
-
-        X = np.array(X_rows, dtype=float)
-        y = np.array(y_rows, dtype=float)
-
-        split = max(1, int(len(X) * 0.8))
-        model = GradientBoostingRegressor(n_estimators=50, max_depth=3, random_state=42)
-        model.fit(X[:split], y[:split])
-
-        if len(X[split:]) > 0:
-            mae = float(np.mean(np.abs(model.predict(X[split:]) - y[split:])))
-            all_maes.append(mae)
-
-        latest = np.array([[counts[-k] for k in range(1, LAG + 1)]], dtype=float)
-        predicted_count = max(0, int(round(float(model.predict(latest)[0]))))
-        delta = predicted_count - current_count
-
-        zones_out.append({
-            "id": z["id"], "name": z["name"],
-            "current_count": current_count,
-            "predicted_count": predicted_count,
-            "delta": delta,
-        })
+        result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
+        zones_out.append(result["zone_out"])
+        if result["model"] is not None:
+            _last_model = result["model"]
+            _last_zone_X = result["X_train"]
+        if result["mae"] is not None:
+            all_maes.append(result["mae"])
 
     model_mae = float(np.mean(all_maes)) if all_maes else None
+
+    # ── MLflow experiment run: log aggregate metrics + register model ─────────
+    if _mlflow_cfg is not None:
+        try:
+            import mlflow.sklearn
+            with mlflow.start_run(run_name=f"gbr_{datetime.now().strftime('%Y%m%dT%H%M%S')}"):
+                mlflow.log_params({
+                    "n_estimators": 50, "max_depth": 3, "random_state": 42,
+                    "lag": _FORECAST_LAG, "horizon": _FORECAST_HORIZON, "train_split": 0.8,
+                })
+                if model_mae is not None:
+                    mlflow.log_metric("mean_mae_across_zones", model_mae)
+                mlflow.log_metric("zones_with_data", len(all_maes))
+                mlflow.set_tag("sufficient_data", str(sufficient_data))
+                mlflow.set_tag("pipeline", "demand_forecast_export")
+                if _last_model is not None and _last_zone_X is not None:
+                    mlflow.sklearn.log_model(
+                        sk_model=_last_model,
+                        artifact_path="model",
+                        registered_model_name=_mlflow_cfg["registry"]["demand_forecast"],
+                        input_example=_last_zone_X[-1:],
+                    )
+        except Exception:
+            pass
+
     payload = {
         "generated_at":    generated_at,
         "horizon_minutes": 30,

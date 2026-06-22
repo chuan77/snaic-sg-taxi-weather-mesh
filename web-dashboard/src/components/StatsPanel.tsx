@@ -15,15 +15,24 @@ const WAIT_CONFIG: Record<WeatherIntensity, { mins: number; label: string }> = {
 interface Props {
   totalTaxis: number;
   regions: Record<string, WeatherIntensity>;
+  coverageScore?: number | null;
 }
 
-export default function StatsPanel({ totalTaxis, regions }: Props) {
+export default function StatsPanel({ totalTaxis, regions, coverageScore }: Props) {
   const dominantIntensity = (Object.values(regions) as WeatherIntensity[]).reduce<WeatherIntensity>(
     (max, cur) => (INTENSITY_RANK[cur] > INTENSITY_RANK[max] ? cur : max),
     'clear',
   );
 
   const { mins, label } = WAIT_CONFIG[dominantIntensity];
+
+  // T2-F7: Fleet Coverage Score — display as % of 1.5 maximum
+  const coveragePct = coverageScore != null ? Math.round((coverageScore / 1.5) * 100) : null;
+  const coverageColor =
+    coveragePct == null ? 'rgba(255,255,255,0.2)'
+    : coveragePct < 50  ? '#ef4444'
+    : coveragePct < 80  ? '#f59e0b'
+    :                     '#22c55e';
 
   return (
     <div className="glass p-3 flex-1 pointer-events-auto">
@@ -74,6 +83,37 @@ export default function StatsPanel({ totalTaxis, regions }: Props) {
             style={{ fontSize: 9, color: '#a855f7' }}
           >
             {label}
+          </div>
+        </div>
+
+        <div className="w-px mx-3 self-stretch" style={{ background: 'rgba(255,255,255,0.08)' }} />
+
+        {/* Stat 3: Fleet Coverage Score (T2-F7) */}
+        <div className="flex flex-col justify-center flex-1">
+          <div
+            className="font-black uppercase tracking-[0.16em] mb-1"
+            style={{ fontSize: 9, color: 'rgba(255,255,255,0.38)' }}
+          >
+            Fleet Cover
+          </div>
+          <div className="flex items-baseline gap-0.5">
+            <span
+              className="font-black tabular-nums leading-none"
+              style={{ fontSize: 30, color: coverageColor, textShadow: `0 0 14px ${coverageColor}55` }}
+            >
+              {coveragePct != null ? coveragePct : '—'}
+            </span>
+            {coveragePct != null && (
+              <span className="font-bold" style={{ fontSize: 14, color: coverageColor }}>
+                %
+              </span>
+            )}
+          </div>
+          <div
+            className="font-semibold mt-0.5"
+            style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }}
+          >
+            Weighted SDI
           </div>
         </div>
 

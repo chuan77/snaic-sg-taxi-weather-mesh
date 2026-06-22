@@ -2,6 +2,8 @@
 import yaml
 import os
 import requests
+import mlflow
+from mlflow.entities import SpanType
 
 _LM_URL   = "http://localhost:1234/api/v1/chat"
 _LM_MODEL = "google/gemma-4-e4b"
@@ -19,6 +21,22 @@ def load_config():
         return yaml.safe_load(file)
 
 
+def get_mlflow_config() -> dict | None:
+    """Return the mlflow config section, or None when mlflow.enabled is false."""
+    cfg = load_config()
+    mlflow_cfg = cfg.get("mlflow", {})
+    if not mlflow_cfg.get("enabled", False):
+        return None
+    return mlflow_cfg
+
+
+def configure_mlflow_tracking(mlflow_cfg: dict) -> None:
+    """Set MLflow tracking URI. MLFLOW_TRACKING_URI env var takes precedence over config."""
+    uri = os.environ.get("MLFLOW_TRACKING_URI") or mlflow_cfg["tracking_uri"]
+    mlflow.set_tracking_uri(uri)
+
+
+@mlflow.trace(span_type=SpanType.LLM, name="lmstudio_completion")
 def ask_llm(system_prompt: str, user_input: str, timeout: int = 8) -> str:
     """Call LMStudio local inference server. Returns response text, or empty string on failure."""
     try:
