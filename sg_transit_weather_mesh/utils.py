@@ -5,8 +5,10 @@ import requests
 import mlflow
 from mlflow.entities import SpanType
 
-_LM_URL   = "http://localhost:1234/api/v1/chat"
-_LM_MODEL = "google/gemma-4-e4b"
+# Docker Model Runner endpoint (from containers: model-runner.docker.internal; from host: localhost:12434)
+# Override via LLM_BASE_URL env var for local dev with LMStudio or other providers.
+_LM_BASE  = os.environ.get("LLM_BASE_URL", "http://localhost:12434/engines/v1")
+_LM_MODEL = os.environ.get("LLM_MODEL", "ai/gemma4:E4B")
 
 
 def load_config():
@@ -18,7 +20,14 @@ def load_config():
         raise FileNotFoundError(f"Missing configuration mapping layer target: {config_path}")
 
     with open(config_path, "r") as file:
-        return yaml.safe_load(file)
+        cfg = yaml.safe_load(file)
+
+    # Allow DATA_GOV_API_KEY env var to override the key in config.yaml (used in Docker)
+    env_key = os.environ.get("DATA_GOV_API_KEY")
+    if env_key:
+        cfg.setdefault("api", {})["key"] = env_key
+
+    return cfg
 
 
 def get_mlflow_config() -> dict | None:
@@ -36,19 +45,25 @@ def configure_mlflow_tracking(mlflow_cfg: dict) -> None:
     mlflow.set_tracking_uri(uri)
 
 
-@mlflow.trace(span_type=SpanType.LLM, name="lmstudio_completion")
+@mlflow.trace(span_type=SpanType.LLM, name="dmr_completion")
 def ask_llm(system_prompt: str, user_input: str, timeout: int = 8) -> str:
-    """Call LMStudio local inference server. Returns response text, or empty string on failure."""
+    """Call Docker Model Runner (OpenAI-compatible) inference endpoint. Returns response text, or empty string on failure."""
     try:
         resp = requests.post(
-            _LM_URL,
-            json={"model": _LM_MODEL, "system_prompt": system_prompt, "input": user_input},
+            f"{_LM_BASE}/chat/completions",
+            json={
+                "model": _LM_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_input},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 256,
+            },
             timeout=timeout,
         )
         resp.raise_for_status()
         data = resp.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"].strip()
-        return data.get("response", "").strip()
+        return data["choices"][0]["message"]["content"].strip()
     except Exception:
         return ""

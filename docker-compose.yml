@@ -1,0 +1,68 @@
+services:
+  dagster:
+    build: .
+    command: uv run dagster dev -h 0.0.0.0 -p 3000
+    ports:
+      - "3000:3000"
+    volumes:
+      - data_vol:/app/data
+      - config_vol:/app/config
+      - public_data_vol:/app/web-dashboard/public/data
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5050
+      DATA_GOV_API_KEY: ${DATA_GOV_API_KEY}
+      LLM_BASE_URL: ${LLM_URL:-http://model-runner.docker.internal/engines/v1}
+    models:
+      - llm
+    depends_on:
+      - mlflow
+
+  mlflow:
+    build: .
+    command: >
+      uv run mlflow server
+        --backend-store-uri sqlite:////app/data/mlflow.db
+        --default-artifact-root /app/data/mlruns
+        --host 0.0.0.0
+        --port 5050
+        --workers 1
+        --host-allowlist mlflow,localhost
+    ports:
+      - "5050:5050"
+    volumes:
+      - data_vol:/app/data
+
+  api:
+    build: .
+    command: uv run uvicorn sg_transit_weather_mesh.api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - data_vol:/app/data
+      - config_vol:/app/config
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5050
+    depends_on:
+      - mlflow
+
+  frontend:
+    build:
+      context: web-dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - public_data_vol:/app/public/data
+    environment:
+      LLM_PROXY_TARGET: http://model-runner.docker.internal
+      VITE_API_BASE: http://localhost:8000
+
+models:
+  llm:
+    model: ai/gemma4:E4B
+    context_size: 8192
+
+volumes:
+  data_vol:
+  config_vol:
+  public_data_vol:

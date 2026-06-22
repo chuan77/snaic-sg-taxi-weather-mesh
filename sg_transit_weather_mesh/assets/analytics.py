@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import mlflow
 from mlflow.entities import SpanType
-from dagster import asset, Output, AssetIn
+from dagster import asset, Output, AssetIn, get_dagster_logger
 from ..utils import ask_llm, get_mlflow_config, configure_mlflow_tracking
 
 _PROJECT_ROOT   = Path(__file__).parent.parent.parent
@@ -998,6 +998,8 @@ def weather_24hr_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
             (f for f, r in zip(p["_forecasts"], p["_ranks"]) if r == max_rank),
             general_forecast,
         )
+        if not dominant_forecast:
+            dominant_forecast = dominant_intensity.replace("_", " ").title()
         periods.append({
             "time_text":          p["time_text"],
             "start":              p["start"],
@@ -1107,14 +1109,19 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     """Trains a GradientBoostingRegressor per hotspot zone on rolling snapshot history,
     predicts taxi count 30 minutes ahead, writes forecast.json."""
 
-    # ── MLflow tracing entry-point: set URI + experiment before any @mlflow.trace spans fire ──
+    # ── MLflow tracing entry-point: resolve experiment object before DuckDB queries ──
+    # experiment_id is passed explicitly to start_run() to avoid a race with
+    # taxi_clusters_export (also runs in parallel) which calls set_experiment() for its
+    # own experiment and overwrites the process-global active-experiment state.
+    _log = get_dagster_logger()
     _mlflow_cfg = get_mlflow_config()
+    _experiment = None
     if _mlflow_cfg is not None:
         try:
             configure_mlflow_tracking(_mlflow_cfg)
-            mlflow.set_experiment(_mlflow_cfg["experiments"]["demand_forecast"])
-        except Exception:
-            pass
+            _experiment = mlflow.set_experiment(_mlflow_cfg["experiments"]["demand_forecast"])
+        except Exception as e:
+            _log.warning(f"MLflow setup failed — skipping experiment tracking: {e}")
 
     conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
     try:
@@ -1148,45 +1155,66 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
 
     sufficient_data = len(timestamps) >= 13
     generated_at = datetime.now().astimezone().isoformat()
-    zones_out = []
+    zones_out: list = []
     all_maes: list[float] = []
     _last_model = None
     _last_zone_X = None
+    model_mae: float | None = None
 
-    for z in HOTSPOT_ZONES:
-        result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
-        zones_out.append(result["zone_out"])
-        if result["model"] is not None:
-            _last_model = result["model"]
-            _last_zone_X = result["X_train"]
-        if result["mae"] is not None:
-            all_maes.append(result["mae"])
-
-    model_mae = float(np.mean(all_maes)) if all_maes else None
-
-    # ── MLflow experiment run: log aggregate metrics + register model ─────────
-    if _mlflow_cfg is not None:
+    # ── MLflow experiment run: open start_run BEFORE @mlflow.trace() calls fire ──
+    # @mlflow.trace() on _train_gbr_zone must nest inside an active run; calling it
+    # outside start_run creates an orphaned trace context that causes the subsequent
+    # run to exit as FAILED even when all work succeeds.
+    # experiment_id is passed explicitly so a parallel DBSCAN set_experiment() call
+    # cannot override the global active experiment between Block 1 and here.
+    if _experiment is not None:
         try:
             import mlflow.sklearn
-            with mlflow.start_run(run_name=f"gbr_{datetime.now().strftime('%Y%m%dT%H%M%S')}"):
+            with mlflow.start_run(
+                run_name=f"gbr_{datetime.now().strftime('%Y%m%dT%H%M%S')}",
+                experiment_id=_experiment.experiment_id,
+            ):
                 mlflow.log_params({
                     "n_estimators": 50, "max_depth": 3, "random_state": 42,
                     "lag": _FORECAST_LAG, "horizon": _FORECAST_HORIZON, "train_split": 0.8,
                 })
+                for z in HOTSPOT_ZONES:
+                    result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
+                    zones_out.append(result["zone_out"])
+                    if result["model"] is not None:
+                        _last_model = result["model"]
+                        _last_zone_X = result["X_train"]
+                    if result["mae"] is not None:
+                        all_maes.append(result["mae"])
+                model_mae = float(np.mean(all_maes)) if all_maes else None
                 if model_mae is not None:
                     mlflow.log_metric("mean_mae_across_zones", model_mae)
                 mlflow.log_metric("zones_with_data", len(all_maes))
                 mlflow.set_tag("sufficient_data", str(sufficient_data))
                 mlflow.set_tag("pipeline", "demand_forecast_export")
                 if _last_model is not None and _last_zone_X is not None:
-                    mlflow.sklearn.log_model(
-                        sk_model=_last_model,
-                        artifact_path="model",
-                        registered_model_name=_mlflow_cfg["registry"]["demand_forecast"],
-                        input_example=_last_zone_X[-1:],
-                    )
-        except Exception:
-            pass
+                    try:
+                        mlflow.sklearn.log_model(
+                            sk_model=_last_model,
+                            artifact_path="model",
+                            registered_model_name=_mlflow_cfg["registry"]["demand_forecast"],
+                            input_example=_last_zone_X[-1:],
+                        )
+                    except Exception:
+                        pass
+        except Exception as e:
+            _log.warning(f"MLflow run failed to complete: {e}")
+    else:
+        # MLflow disabled or setup failed — train without tracking
+        for z in HOTSPOT_ZONES:
+            result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
+            zones_out.append(result["zone_out"])
+            if result["model"] is not None:
+                _last_model = result["model"]
+                _last_zone_X = result["X_train"]
+            if result["mae"] is not None:
+                all_maes.append(result["mae"])
+        model_mae = float(np.mean(all_maes)) if all_maes else None
 
     payload = {
         "generated_at":    generated_at,

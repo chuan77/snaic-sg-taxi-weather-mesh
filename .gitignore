@@ -9,6 +9,7 @@ plan/
 
 # Virtual environments
 .venv
+.env
 
 # Ignore local database states
 data/warehouse.duckdb

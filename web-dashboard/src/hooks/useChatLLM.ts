@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../types';
 
-const LM_BASE = 'http://localhost:1234';
+// LLM requests use the Vite proxy (/llm/* → Docker Model Runner).
+// Proxy target is configured via LLM_PROXY_TARGET in vite.config.ts (server-side env var).
 
 function buildSystemPrompt(ctx: Record<string, unknown>): string {
   const areas = (ctx.areas as Array<Record<string, string>> ?? [])
@@ -19,7 +20,13 @@ function buildSystemPrompt(ctx: Record<string, unknown>): string {
     .join('\n');
 
   const forecast24h = (ctx.forecast_24h as Array<Record<string, unknown>> ?? [])
-    .map(p => `- ${p.time_text}: ${p.dominant_forecast}`)
+    .map(p => {
+      const label = (p.dominant_forecast as string) ||
+        (p.dominant_intensity as string)?.replace(/_/g, ' ') || 'drizzle';
+      const r = p.regions as Record<string, string> | undefined;
+      const reg = r ? ` (C:${r.central} E:${r.east} N:${r.north} S:${r.south} W:${r.west})` : '';
+      return `- ${p.time_text}: ${label}${reg}`;
+    })
     .join('\n');
 
   const forecastNote = ctx.sufficient_forecast
@@ -48,14 +55,14 @@ Rules:
 - "1 hour" or "2 hours" = use nowcast trend and 24-hour forecast for the relevant region.
 - "tonight" = use 24-hour forecast.
 - Taxi questions for areas not listed as a zone: use the nearest zone and same-region context.
-- Answer in 2-3 sentences max. State uncertainty clearly. No emojis.`;
+- Think briefly. Answer in 2-3 sentences max. State uncertainty clearly. No emojis.`;
 }
 
 export type OfflineReason = 'not_running' | 'no_model' | 'cors' | null;
 
 async function detectModel(): Promise<{ model: string | null; reason: OfflineReason }> {
   try {
-    const res = await fetch(`${LM_BASE}/v1/models`);
+    const res = await fetch('/llm/models');
     if (!res.ok) return { model: null, reason: 'not_running' };
     const data = await res.json();
     const id: string | undefined = data.data?.[0]?.id;
@@ -81,9 +88,9 @@ export function useChatLLM() {
     if (!model) {
       setOfflineReason(reason);
       const hint =
-        reason === 'no_model'   ? 'LMStudio is running but no model is loaded. Load a model in LMStudio and try again.' :
-        reason === 'cors'       ? 'LMStudio is running but CORS is blocked. In LMStudio go to Developer → Local Server and enable "Allow CORS from any origin".' :
-                                  'LMStudio is not running on port 1234. Start LMStudio and load a model.';
+        reason === 'no_model' ? 'Docker Model Runner is running but no model is loaded. Pull the model: docker model pull ai/gemma4:E4B' :
+        reason === 'cors'     ? 'Cannot reach Docker Model Runner. Ensure Docker Desktop is running and the model is pulled: docker model pull ai/gemma4:E4B' :
+                                'Docker Model Runner is not reachable. Start Docker Desktop and ensure the model runner is enabled.';
       setMessages(prev => [...prev, { role: 'assistant', content: hint }]);
       setLoading(false);
       return;
@@ -98,7 +105,7 @@ export function useChatLLM() {
     const systemPrompt = buildSystemPrompt(ctx);
 
     try {
-      const res = await fetch(`${LM_BASE}/v1/chat/completions`, {
+      const res = await fetch('/llm/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -109,13 +116,17 @@ export function useChatLLM() {
             userMsg,
           ],
           temperature: 0.5,
-          max_tokens: 200,
+          max_tokens: 2048,
           stream: false,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const reply: string = data.choices?.[0]?.message?.content?.trim() ?? '(no response)';
+      const raw = data.choices?.[0]?.message;
+      const reply: string =
+        raw?.content?.trim() ||
+        (raw?.reasoning_content as string | undefined)?.split('\n').slice(-3).join(' ').trim() ||
+        '(no response)';
       setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
       setOfflineReason(null);
     } catch (e) {
