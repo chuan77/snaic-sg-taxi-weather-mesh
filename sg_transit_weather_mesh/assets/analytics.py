@@ -348,6 +348,8 @@ def _classify_areas(rows: list, has_valid_period: bool) -> tuple:
                 vp_text = "2-hour forecast"
                 update_ts = str(ts)
 
+        if lat is None or lon is None:
+            continue
         intensity = FORECAST_INTENSITY.get(str(forecast), "drizzle")
         region = AREA_REGION.get(str(area), "Central")
         areas.append({
@@ -355,8 +357,8 @@ def _classify_areas(rows: list, has_valid_period: bool) -> tuple:
             "region": region,
             "forecast": str(forecast),
             "intensity": intensity,
-            "latitude": float(lat) if lat is not None else 0.0,
-            "longitude": float(lon) if lon is not None else 0.0,
+            "latitude": float(lat),
+            "longitude": float(lon),
         })
 
     return areas, vp_start, vp_end, vp_text, update_ts
@@ -440,6 +442,9 @@ def analytics_taxi_weather_mart(ingest_sg_raw_data):
                = DATE_TRUNC('hour', CAST(w.timestamp AS TIMESTAMP))
              AND ROUND(t.latitude,  1) = ROUND(w.latitude,  1)
              AND ROUND(t.longitude, 1) = ROUND(w.longitude, 1)
+            WHERE t.latitude  IS NOT NULL AND t.longitude IS NOT NULL
+              AND t.latitude  BETWEEN 1.1 AND 1.5
+              AND t.longitude BETWEEN 103.5 AND 104.1
             GROUP BY 1, 2, 3;
         """)
         row_count = conn.execute("SELECT COUNT(*) FROM mart.fct_taxi_weather_trends").fetchone()[0]
@@ -537,7 +542,10 @@ def hotspots_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         taxi_rows = conn.execute("""
             SELECT latitude, longitude
             FROM raw.taxi_availability
-            WHERE timestamp = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+            WHERE timestamp  = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+              AND latitude   IS NOT NULL AND longitude IS NOT NULL
+              AND latitude   BETWEEN 1.1 AND 1.5
+              AND longitude  BETWEEN 103.5 AND 104.1
         """).fetchall()
         snapshot_ts = conn.execute(
             "SELECT MAX(timestamp) FROM raw.taxi_availability"
@@ -620,7 +628,10 @@ def taxis_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         rows = conn.execute("""
             SELECT latitude, longitude
             FROM raw.taxi_availability
-            WHERE timestamp = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+            WHERE timestamp  = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+              AND latitude   IS NOT NULL AND longitude IS NOT NULL
+              AND latitude   BETWEEN 1.1 AND 1.5
+              AND longitude  BETWEEN 103.5 AND 104.1
         """).fetchall()
         snapshot_ts = conn.execute(
             "SELECT MAX(timestamp) FROM raw.taxi_availability"
@@ -702,7 +713,10 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         rows = conn.execute("""
             SELECT latitude, longitude
             FROM raw.taxi_availability
-            WHERE timestamp = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+            WHERE timestamp  = (SELECT MAX(timestamp) FROM raw.taxi_availability)
+              AND latitude   IS NOT NULL AND longitude IS NOT NULL
+              AND latitude   BETWEEN 1.1 AND 1.5
+              AND longitude  BETWEEN 103.5 AND 104.1
         """).fetchall()
         snapshot_ts = conn.execute(
             "SELECT MAX(timestamp) FROM raw.taxi_availability"
@@ -898,8 +912,9 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
             rows = conn.execute("""
                 SELECT CAST(timestamp AS VARCHAR) AS ts, COUNT(*) AS cnt
                 FROM raw.taxi_availability
-                WHERE latitude  BETWEEN ? AND ?
-                  AND longitude BETWEEN ? AND ?
+                WHERE latitude   IS NOT NULL AND longitude IS NOT NULL
+                  AND latitude   BETWEEN ? AND ?
+                  AND longitude  BETWEEN ? AND ?
                 GROUP BY ts
                 ORDER BY ts
             """, [

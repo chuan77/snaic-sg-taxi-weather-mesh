@@ -1,5 +1,6 @@
 # sg_transit_weather_mesh/assets/ingestion.py
 import dlt
+import duckdb
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -21,16 +22,23 @@ _WEATHER_24H_V2_URL = "https://api-open.data.gov.sg/v2/real-time/api/twenty-four
 
 @dlt.source
 def sg_gov_source():
-    @dlt.resource(write_disposition="append")
+    _SG_LAT = (1.1, 1.5)
+    _SG_LON = (103.5, 104.1)
+
+    @dlt.resource(write_disposition="append", primary_key=["timestamp", "latitude", "longitude"])
     def taxi_availability():
         """GeoJSON point cloud of all available taxis — one row per coordinate."""
         url = f"{_BASE_URL_V1}/transport/taxi-availability"
         response = requests.get(url, headers=_HEADERS_V1, timeout=30)
         response.raise_for_status()
         data = response.json()
+        if not data.get("features"):
+            return
         feature = data["features"][0]
         timestamp = feature["properties"]["timestamp"]
         for lon, lat in feature["geometry"]["coordinates"]:
+            if not (_SG_LAT[0] <= lat <= _SG_LAT[1] and _SG_LON[0] <= lon <= _SG_LON[1]):
+                continue
             yield {"timestamp": timestamp, "latitude": lat, "longitude": lon}
 
     @dlt.resource(write_disposition="replace", primary_key=["timestamp", "area"])
@@ -138,4 +146,26 @@ def ingest_sg_raw_data():
         dataset_name="raw",
     )
     load_info = pipeline.run(sg_gov_source())
-    return Output(value=None, metadata={"dlt_load_summary": str(load_info)})
+
+    conn = duckdb.connect(_DB_PATH, read_only=True)
+    try:
+        rows_total = conn.execute(
+            "SELECT COUNT(*) FROM raw.taxi_availability"
+        ).fetchone()[0]
+        rows_valid = conn.execute("""
+            SELECT COUNT(*) FROM raw.taxi_availability
+            WHERE latitude  BETWEEN 1.1 AND 1.5
+              AND longitude BETWEEN 103.5 AND 104.1
+        """).fetchone()[0]
+    finally:
+        conn.close()
+
+    return Output(
+        value=None,
+        metadata={
+            "dlt_load_summary":  str(load_info),
+            "rows_total":        rows_total,
+            "rows_in_bounds":    rows_valid,
+            "rows_filtered_pct": round((1 - rows_valid / rows_total) * 100, 2) if rows_total else 0,
+        },
+    )

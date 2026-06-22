@@ -8,7 +8,9 @@ from sg_transit_weather_mesh.assets.ingestion import (
     sg_gov_source,
     ingest_sg_raw_data,
     _WEATHER_V2_URL,
+    _WEATHER_24H_V2_URL,
 )
+import sg_transit_weather_mesh.assets.ingestion as ingestion_module
 
 MOCK_TAXI_RESPONSE = {
     "type": "FeatureCollection",
@@ -45,6 +47,37 @@ MOCK_WEATHER_RESPONSE_V2 = {
         }],
     },
     "errorMsg": None,
+}
+
+MOCK_WEATHER_24H_RESPONSE = {
+    "data": {
+        "records": [{
+            "updatedTimestamp": "2026-06-21T08:00:00+08:00",
+            "validPeriod": {
+                "start": "2026-06-21T06:00:00+08:00",
+                "end": "2026-06-22T06:00:00+08:00",
+            },
+            "general": {
+                "forecast": {"summary": "Thundery Showers"},
+                "temperature": {"low": 25, "high": 34},
+                "relativeHumidity": {"low": 60, "high": 95},
+            },
+            "periods": [{
+                "timePeriod": {
+                    "text": "Morning",
+                    "start": "2026-06-21T06:00:00+08:00",
+                    "end": "2026-06-21T12:00:00+08:00",
+                },
+                "regions": {
+                    "north": {"forecast": "Partly Cloudy"},
+                    "south": {"forecast": "Light Showers"},
+                    "east":  {"forecast": "Partly Cloudy"},
+                    "west":  {"forecast": "Partly Cloudy"},
+                    "central": {"forecast": "Thundery Showers"},
+                },
+            }],
+        }]
+    }
 }
 
 
@@ -202,10 +235,12 @@ def test_ingest_asset_runs_end_to_end(tmp_path, monkeypatch):
         return original_pipeline(**kwargs)
 
     monkeypatch.setattr(dlt, "pipeline", _pipeline_redirected_to_tmp)
+    monkeypatch.setattr(ingestion_module, "_DB_PATH", db_path)
 
     with requests_mock.Mocker() as mock:
         mock.get(f"{base_url}/transport/taxi-availability", json=MOCK_TAXI_RESPONSE)
         mock.get(_WEATHER_V2_URL, json=MOCK_WEATHER_RESPONSE_V2)
+        mock.get(_WEATHER_24H_V2_URL, json=MOCK_WEATHER_24H_RESPONSE)
         result = ingest_sg_raw_data()
 
     assert result is not None
