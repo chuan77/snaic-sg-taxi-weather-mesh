@@ -1,4 +1,4 @@
-import type { HotspotEntry, SurgeZone } from '../types';
+import type { HotspotEntry, SurgeZone, ForecastZone } from '../types';
 
 const LEVEL_STYLE = {
   high:   { dotColor: '#a855f7' },
@@ -19,14 +19,22 @@ const SURGE_PULSE: Record<string, string> = {
   low:      '',
 };
 
+function deltaColor(delta: number): string {
+  if (delta > 3)  return '#06b6d4';  // growing — cyan
+  if (delta < -3) return '#f43f5e';  // dropping — pink
+  return '#f59e0b';                   // stable — amber
+}
+
 interface Props {
   hotspots: HotspotEntry[];
   totalTaxis?: number;
   surgeZones?: SurgeZone[];
+  forecastZones?: ForecastZone[];
 }
 
-export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [] }: Props) {
-  const surgeMap = Object.fromEntries(surgeZones.map(z => [z.id, z]));
+export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [], forecastZones = [] }: Props) {
+  const surgeMap    = Object.fromEntries(surgeZones.map(z => [z.id, z]));
+  const forecastMap = Object.fromEntries(forecastZones.map(z => [z.id, z]));
 
   return (
     <div className="glass p-3 flex-1 pointer-events-auto">
@@ -50,6 +58,8 @@ export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [] }
           const surge = surgeMap[h.id];
           const pulseColor = surge ? SURGE_PULSE[surge.alert_level] : '';
           const sdiColor   = h.sdi_label ? SDI_COLOR[h.sdi_label] ?? '#6b7280' : '#6b7280';
+
+          const fz = forecastMap[h.id];
 
           return (
             <div key={h.id} className="flex items-center justify-between">
@@ -85,6 +95,16 @@ export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [] }
                 {h.taxi_count > 0 && (
                   <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)' }}>
                     {h.taxi_count}
+                  </span>
+                )}
+                {/* 30-min prediction chip */}
+                {fz && (
+                  <span
+                    className="font-semibold tabular-nums"
+                    style={{ fontSize: 9, color: deltaColor(fz.delta) }}
+                    title={`Predicted in 30 min: ${fz.predicted_count} (${fz.delta >= 0 ? '+' : ''}${fz.delta})`}
+                  >
+                    →{fz.predicted_count}
                   </span>
                 )}
               </div>

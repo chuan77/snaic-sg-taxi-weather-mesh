@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
+plan/
 
 # Virtual environments
 .venv
@@ -32,6 +33,8 @@ web-dashboard/public/data/taxis.json
 web-dashboard/public/data/surge.json
 web-dashboard/public/data/clusters.json
 web-dashboard/public/data/forecast24h.json
+web-dashboard/public/data/forecast.json
+web-dashboard/public/data/chat_context.json
 
 # ==========================================
 # 🗄️ Relational Database & Warehouse Dumps

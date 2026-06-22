@@ -144,3 +144,24 @@ export interface Forecast24hData {
   };
   periods: Forecast24hPeriod[];
 }
+
+export interface ForecastZone {
+  id: string;
+  name: string;
+  current_count: number;
+  predicted_count: number;
+  delta: number;
+}
+
+export interface DemandForecastData {
+  generated_at: string;
+  horizon_minutes: number;
+  sufficient_data: boolean;
+  model_mae: number | null;
+  zones: ForecastZone[];
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}

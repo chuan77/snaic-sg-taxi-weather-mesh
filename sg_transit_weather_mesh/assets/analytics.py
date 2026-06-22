@@ -5,7 +5,8 @@ import duckdb
 import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_score
-from datetime import datetime
+from sklearn.ensemble import GradientBoostingRegressor
+from datetime import datetime, timedelta
 from pathlib import Path
 from dagster import asset, Output, AssetIn
 from ..utils import ask_llm
@@ -16,7 +17,9 @@ _HOTSPOTS_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "hotspot
 _TAXIS_JSON     = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis.json"
 _SURGE_JSON     = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "surge.json"
 _CLUSTERS_JSON    = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "clusters.json"
-_FORECAST24H_JSON = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast24h.json"
+_FORECAST24H_JSON   = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast24h.json"
+_FORECAST_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast.json"
+_CHAT_CONTEXT_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "chat_context.json"
 
 # NEA official forecast string → WeatherIntensity level used by the frontend
 FORECAST_INTENSITY: dict[str, str] = {
@@ -864,5 +867,187 @@ def weather_24hr_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
             "periods_exported":  len(periods),
             "general_intensity": general_intensity,
             "forecast24h_path":  str(_FORECAST24H_JSON),
+        },
+    )
+
+
+@asset(
+    ins={
+        "ingest_sg_raw_data":          AssetIn(),
+        "analytics_taxi_weather_mart": AssetIn(),
+    },
+    compute_kind="python",
+)
+def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
+    """Trains a GradientBoostingRegressor per hotspot zone on rolling snapshot history,
+    predicts taxi count 30 minutes ahead, writes forecast.json."""
+
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        ts_rows = conn.execute("""
+            SELECT DISTINCT CAST(timestamp AS VARCHAR) AS ts
+            FROM raw.taxi_availability
+            ORDER BY ts
+        """).fetchall()
+        timestamps = [r[0] for r in ts_rows]
+
+        zone_counts: dict[str, list[int]] = {z["id"]: [] for z in HOTSPOT_ZONES}
+        for z in HOTSPOT_ZONES:
+            lat_d = z["radius_km"] / 111.0
+            lng_d = z["radius_km"] / (111.0 * math.cos(math.radians(z["lat"])))
+            rows = conn.execute("""
+                SELECT CAST(timestamp AS VARCHAR) AS ts, COUNT(*) AS cnt
+                FROM raw.taxi_availability
+                WHERE latitude  BETWEEN ? AND ?
+                  AND longitude BETWEEN ? AND ?
+                GROUP BY ts
+                ORDER BY ts
+            """, [
+                z["lat"] - lat_d, z["lat"] + lat_d,
+                z["lng"] - lng_d, z["lng"] + lng_d,
+            ]).fetchall()
+            count_map = {r[0]: int(r[1]) for r in rows}
+            zone_counts[z["id"]] = [count_map.get(ts, 0) for ts in timestamps]
+    finally:
+        conn.close()
+
+    sufficient_data = len(timestamps) >= 13
+    generated_at = datetime.now().astimezone().isoformat()
+    zones_out = []
+    all_maes: list[float] = []
+    HORIZON = 6
+    LAG = 6
+
+    for z in HOTSPOT_ZONES:
+        counts = zone_counts[z["id"]]
+        current_count = counts[-1] if counts else 0
+
+        if not sufficient_data or len(counts) < LAG + HORIZON + 1:
+            zones_out.append({
+                "id": z["id"], "name": z["name"],
+                "current_count": current_count, "predicted_count": current_count, "delta": 0,
+            })
+            continue
+
+        X_rows, y_rows = [], []
+        for i in range(LAG, len(counts) - HORIZON):
+            X_rows.append([counts[i - k] for k in range(1, LAG + 1)])
+            y_rows.append(counts[i + HORIZON])
+
+        if len(X_rows) < 5:
+            zones_out.append({
+                "id": z["id"], "name": z["name"],
+                "current_count": current_count, "predicted_count": current_count, "delta": 0,
+            })
+            continue
+
+        X = np.array(X_rows, dtype=float)
+        y = np.array(y_rows, dtype=float)
+
+        split = max(1, int(len(X) * 0.8))
+        model = GradientBoostingRegressor(n_estimators=50, max_depth=3, random_state=42)
+        model.fit(X[:split], y[:split])
+
+        if len(X[split:]) > 0:
+            mae = float(np.mean(np.abs(model.predict(X[split:]) - y[split:])))
+            all_maes.append(mae)
+
+        latest = np.array([[counts[-k] for k in range(1, LAG + 1)]], dtype=float)
+        predicted_count = max(0, int(round(float(model.predict(latest)[0]))))
+        delta = predicted_count - current_count
+
+        zones_out.append({
+            "id": z["id"], "name": z["name"],
+            "current_count": current_count,
+            "predicted_count": predicted_count,
+            "delta": delta,
+        })
+
+    model_mae = float(np.mean(all_maes)) if all_maes else None
+    payload = {
+        "generated_at":    generated_at,
+        "horizon_minutes": 30,
+        "sufficient_data": sufficient_data,
+        "model_mae":       model_mae,
+        "zones":           zones_out,
+    }
+
+    _FORECAST_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _FORECAST_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return Output(
+        value=None,
+        metadata={
+            "zones_exported":  len(zones_out),
+            "sufficient_data": sufficient_data,
+            "model_mae":       model_mae,
+            "forecast_path":   str(_FORECAST_JSON),
+        },
+    )
+
+
+@asset(
+    ins={
+        "weather_nowcast_export": AssetIn(),
+        "hotspots_export":        AssetIn(),
+        "demand_forecast_export": AssetIn(),
+        "weather_24hr_export":    AssetIn(),
+    },
+    compute_kind="python",
+)
+def chat_context_export(
+    weather_nowcast_export,
+    hotspots_export,
+    demand_forecast_export,
+    weather_24hr_export,
+):
+    """Merges nowcast, hotspot, 30-min forecast, and 24-hr data into a single LLM context file."""
+
+    def _read_json(path: Path) -> dict:
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
+    nowcast  = _read_json(_NOWCAST_JSON)
+    hotspots = _read_json(_HOTSPOTS_JSON)
+    forecast = _read_json(_FORECAST_JSON)
+    f24      = _read_json(_FORECAST24H_JSON)
+
+    forecast_map = {z["id"]: z for z in forecast.get("zones", [])}
+
+    merged_hotspots = []
+    for h in hotspots.get("hotspots", []):
+        fz = forecast_map.get(h.get("id", ""), {})
+        merged_hotspots.append({
+            "id":              h.get("id", ""),
+            "name":            h.get("name", ""),
+            "taxi_count":      h.get("taxi_count", 0),
+            "predicted_count": fz.get("predicted_count", h.get("taxi_count", 0)),
+            "delta":           fz.get("delta", 0),
+            "sdi_label":       h.get("sdi_label", ""),
+            "level":           h.get("level", "low"),
+        })
+
+    payload = {
+        "generated_at":       datetime.now().astimezone().isoformat(),
+        "total_taxis":        hotspots.get("total_taxis_online", 0),
+        "valid_period_text":  nowcast.get("valid_period", {}).get("text", ""),
+        "sufficient_forecast": forecast.get("sufficient_data", False),
+        "areas":              nowcast.get("areas", []),
+        "hotspots":           merged_hotspots,
+        "nowcast_timeline":   nowcast.get("timeline", []),
+        "forecast_24h":       f24.get("periods", []),
+    }
+
+    _CHAT_CONTEXT_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _CHAT_CONTEXT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return Output(
+        value=None,
+        metadata={
+            "areas_count":       len(payload["areas"]),
+            "hotspots_count":    len(payload["hotspots"]),
+            "chat_context_path": str(_CHAT_CONTEXT_JSON),
         },
     )

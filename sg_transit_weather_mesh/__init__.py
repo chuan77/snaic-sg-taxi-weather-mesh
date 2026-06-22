@@ -13,7 +13,7 @@ all_assets = load_assets_from_modules([ingestion, analytics])
 # 3. Corrected Function Name: define_asset_job (lowercase)
 pipeline_execution_job = define_asset_job(
     name="sg_taxi_weather_sync_job",
-    selection=["ingest_sg_raw_data", "analytics_taxi_weather_mart", "weather_nowcast_export", "hotspots_export", "taxis_export", "surge_predictor_export", "taxi_clusters_export", "weather_24hr_export"]
+    selection=["ingest_sg_raw_data", "analytics_taxi_weather_mart", "weather_nowcast_export", "hotspots_export", "taxis_export", "surge_predictor_export", "taxi_clusters_export", "weather_24hr_export", "demand_forecast_export", "chat_context_export"]
 )
 
 # 4. Bind the Job to a cron schedule dynamically derived from config.yaml

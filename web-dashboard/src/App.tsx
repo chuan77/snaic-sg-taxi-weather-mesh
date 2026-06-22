@@ -5,6 +5,7 @@ import { useTaxis } from './hooks/useTaxis';
 import { useSurge } from './hooks/useSurge';
 import { useClusters } from './hooks/useClusters';
 import { useForecast24h } from './hooks/useForecast24h';
+import { useForecast } from './hooks/useForecast';
 import MapLayer from './components/MapLayer';
 import HeaderOverlay from './components/HeaderOverlay';
 import Legend from './components/Legend';
@@ -15,6 +16,7 @@ import DemandHotspots from './components/DemandHotspots';
 import StatsPanel from './components/StatsPanel';
 import AlertsPanel from './components/AlertsPanel';
 import BottomNav from './components/BottomNav';
+import ChatPanel from './components/ChatPanel';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('map');
@@ -26,6 +28,7 @@ export default function App() {
   const { data: surgeData } = useSurge();
   const { data: clustersData } = useClusters();
   const { data: forecast24h } = useForecast24h();
+  const { data: forecastData } = useForecast();
 
   const mapMode = activeTab === 'demand' ? 'heatmap' : 'map';
 
@@ -87,10 +90,14 @@ export default function App() {
             hotspots={hotspotsData.hotspots}
             totalTaxis={hotspotsData.total_taxis_online}
             surgeZones={surgeData.zones}
+            forecastZones={forecastData.zones}
           />
           <StatsPanel totalTaxis={hotspotsData.total_taxis_online} regions={nowcast.regions} />
         </div>
       )}
+
+      {/* ── Chat assistant — always rendered, manages own open state ─────── */}
+      <ChatPanel />
 
       {/* ── Bottom nav bar ────────────────────────────────────────────────── */}
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
