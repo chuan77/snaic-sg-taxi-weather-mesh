@@ -1,4 +1,5 @@
-import type { HotspotEntry, SurgeZone, ForecastZone } from '../types';
+import { useState } from 'react';
+import type { HotspotEntry, SurgeZone, ForecastZone, PlanningAreaEntry } from '../types';
 
 const LEVEL_STYLE = {
   high:   { dotColor: '#a855f7' },
@@ -19,6 +20,15 @@ const SURGE_PULSE: Record<string, string> = {
   low:      '',
 };
 
+const ZONE_AREA: Record<string, string> = {
+  h1: 'Downtown Core',
+  h2: 'Changi',
+  h3: 'Orchard',
+  h4: 'Jurong East',
+  h5: 'Woodlands',
+  h6: 'Tampines',
+};
+
 function deltaColor(delta: number): string {
   if (delta > 3)  return '#06b6d4';  // growing — cyan
   if (delta < -3) return '#f43f5e';  // dropping — pink
@@ -30,11 +40,13 @@ interface Props {
   totalTaxis?: number;
   surgeZones?: SurgeZone[];
   forecastZones?: ForecastZone[];
+  planningAreas?: PlanningAreaEntry[];
 }
 
-export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [], forecastZones = [] }: Props) {
+export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [], forecastZones = [], planningAreas = [] }: Props) {
   const surgeMap    = Object.fromEntries(surgeZones.map(z => [z.id, z]));
   const forecastMap = Object.fromEntries(forecastZones.map(z => [z.id, z]));
+  const [areasOpen, setAreasOpen] = useState(false);
 
   return (
     <div className="glass p-3 flex-1 pointer-events-auto">
@@ -72,12 +84,19 @@ export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [], 
                     boxShadow:  `0 0 ${pulseColor ? '6px' : '4px'} ${pulseColor || dot}`,
                   }}
                 />
-                <span
-                  className="font-medium"
-                  style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)' }}
-                >
-                  {h.name}
-                </span>
+                <div>
+                  <span
+                    className="font-medium"
+                    style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)' }}
+                  >
+                    {h.name}
+                  </span>
+                  {ZONE_AREA[h.id] && (
+                    <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', display: 'block', marginTop: 1 }}>
+                      {ZONE_AREA[h.id]}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -112,6 +131,52 @@ export default function DemandHotspots({ hotspots, totalTaxis, surgeZones = [], 
           );
         })}
       </div>
+
+      {/* Planning areas accordion — only shown when subzones data is loaded */}
+      {planningAreas.length > 0 && (
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', marginTop: 8 }}>
+          <button
+            onClick={() => setAreasOpen(v => !v)}
+            style={{
+              width: '100%', display: 'flex', justifyContent: 'space-between',
+              alignItems: 'center', padding: '5px 0',
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'rgba(255,255,255,0.4)', fontSize: 9, letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+            }}
+          >
+            <span>Planning Areas</span>
+            <span>{areasOpen ? '▴' : '▾'}</span>
+          </button>
+
+          {areasOpen && (
+            <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+              {planningAreas.slice(0, 15).map(area => {
+                const pct = totalTaxis ? Math.round((area.count / totalTaxis) * 100) : 0;
+                return (
+                  <div key={area.name} style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '3px 0', fontSize: 10,
+                  }}>
+                    <span style={{ flex: 1, color: 'rgba(255,255,255,0.7)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {area.name}
+                    </span>
+                    <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.25)', minWidth: 28, textAlign: 'right' }}>
+                      {area.region.replace(' Region', '')}
+                    </span>
+                    <div style={{ width: 48, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 2 }}>
+                      <div style={{ width: `${Math.min(pct * 5, 100)}%`, height: '100%', background: 'rgba(6,182,212,0.6)', borderRadius: 2 }} />
+                    </div>
+                    <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', minWidth: 22, textAlign: 'right' }}>
+                      {area.count}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

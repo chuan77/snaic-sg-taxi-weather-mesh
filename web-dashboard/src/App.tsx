@@ -6,6 +6,7 @@ import { useSurge } from './hooks/useSurge';
 import { useClusters } from './hooks/useClusters';
 import { useForecast24h } from './hooks/useForecast24h';
 import { useForecast } from './hooks/useForecast';
+import { useSubzones } from './hooks/useSubzones';
 import MapLayer from './components/MapLayer';
 import HeaderOverlay from './components/HeaderOverlay';
 import Legend from './components/Legend';
@@ -29,6 +30,7 @@ export default function App() {
   const { data: clustersData } = useClusters();
   const { data: forecast24h } = useForecast24h();
   const { data: forecastData } = useForecast();
+  const { data: subzonesData } = useSubzones();
 
   const mapMode = activeTab === 'demand' ? 'heatmap' : 'map';
 
@@ -91,6 +93,7 @@ export default function App() {
             totalTaxis={hotspotsData.total_taxis_online}
             surgeZones={surgeData.zones}
             forecastZones={forecastData.zones}
+            planningAreas={subzonesData.planning_areas}
           />
           <StatsPanel totalTaxis={hotspotsData.total_taxis_online} regions={nowcast.regions} />
         </div>
