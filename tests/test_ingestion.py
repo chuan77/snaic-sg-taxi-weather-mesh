@@ -261,3 +261,47 @@ def test_ingest_asset_runs_end_to_end(tmp_path, monkeypatch):
         result = ingest_sg_raw_data()
 
     assert result is not None
+
+
+def test_subzone_boundaries_cache_guard_rejects_null_geometries(tmp_path):
+    """Cache guard must re-download if geometry column has NULLs even when row count >= 300."""
+    import duckdb
+    from unittest.mock import patch
+    from pathlib import Path
+
+    db_path = str(tmp_path / "test.duckdb")
+    # Create a table with 300 rows but all-NULL geometries
+    conn = duckdb.connect(db_path)
+    conn.execute("CREATE SCHEMA IF NOT EXISTS raw")
+    conn.execute(
+        "CREATE TABLE raw.sg_subzone_boundaries AS "
+        "SELECT i AS subzone_code, NULL AS geometry "
+        "FROM generate_series(1, 300) t(i)"
+    )
+    conn.close()
+
+    download_called = []
+
+    _PRESIGNED_URL = "https://s3.example.com/mp2019.geojson"
+    _MOCK_MP2019_POLL = {"data": {"url": _PRESIGNED_URL}}
+    _MOCK_MP2019_GEOJSON = {"type": "FeatureCollection", "features": []}
+
+    with patch("sg_transit_weather_mesh.assets.ingestion._DB_PATH", db_path):
+        with requests_mock.Mocker() as mock:
+            # Track if download is attempted
+            def request_callback(request, context):
+                download_called.append(True)
+                return _MOCK_MP2019_GEOJSON
+
+            mock.get(_MP2019_POLL_URL, json=_MOCK_MP2019_POLL)
+            mock.get(_PRESIGNED_URL, json=request_callback)
+
+            from sg_transit_weather_mesh.assets.ingestion import sg_gov_source
+            source = sg_gov_source()
+            # Call the underlying function (skip Dagster context by calling inner logic)
+            # We test the guard logic directly by checking download_called
+            try:
+                list(source.resources["sg_subzone_boundaries"])
+            except Exception:
+                pass  # asset may error after fake download — we only care about download_called
+            assert download_called, "Asset must attempt re-download when geometries are NULL"

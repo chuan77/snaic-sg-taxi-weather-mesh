@@ -156,9 +156,12 @@ def sg_gov_source():
                 existing = conn.execute(
                     "SELECT COUNT(*) FROM raw.sg_subzone_boundaries"
                 ).fetchone()[0]
+                non_null_geom = conn.execute(
+                    "SELECT COUNT(*) FROM raw.sg_subzone_boundaries WHERE geometry IS NOT NULL"
+                ).fetchone()[0]
             finally:
                 conn.close()
-            if existing >= 300:
+            if existing >= 300 and non_null_geom >= 300:
                 return
         except Exception:
             pass  # table not yet created — proceed with download
