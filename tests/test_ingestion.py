@@ -278,14 +278,19 @@ def test_fetch_json_retries_on_500(requests_mock):
 
 def test_fetch_json_backs_off_on_429(requests_mock):
     """429 must trigger a backoff-then-retry, not an immediate raise."""
+    from unittest.mock import patch
     requests_mock.get("https://example.com/api", [
         {"status_code": 429, "headers": {"Retry-After": "1"}},
         {"json": {"ok": True}, "status_code": 200},
     ])
     from sg_transit_weather_mesh.assets.ingestion import _fetch_json
-    result = _fetch_json("https://example.com/api")
-    assert result == {"ok": True}
-    assert requests_mock.call_count == 2
+    with patch("sg_transit_weather_mesh.assets.ingestion._time.sleep") as mock_sleep:
+        result = _fetch_json("https://example.com/api")
+        assert result == {"ok": True}
+        assert requests_mock.call_count == 2
+        # At least one sleep call must be for the 429 Retry-After value (1 second)
+        sleep_args = [call[0][0] for call in mock_sleep.call_args_list]
+        assert 1 in sleep_args, f"Expected a 1-second sleep from Retry-After header; got: {sleep_args}"
 
 
 def test_fetch_json_raises_immediately_on_403(requests_mock):
@@ -424,6 +429,10 @@ def test_pipeline_continues_after_one_resource_fails(requests_mock, tmp_path):
         "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast",
         status_code=500,
     )
+    requests_mock.get(
+        _MP2019_POLL_URL,
+        status_code=500,
+    )
 
     with patch("sg_transit_weather_mesh.assets.ingestion._DB_PATH", db_path):
         from sg_transit_weather_mesh.assets.ingestion import sg_gov_source
@@ -438,3 +447,15 @@ def test_pipeline_continues_after_one_resource_fails(requests_mock, tmp_path):
     count = conn.execute("SELECT COUNT(*) FROM raw.taxi_availability").fetchone()[0]
     conn.close()
     assert count > 0, "taxi rows must be present even when weather resources fail"
+
+
+def test_weather_forecast_24hr_returns_empty_on_missing_records(requests_mock):
+    """If API returns JSON without 'data.records', resource must yield 0 rows (not raise)."""
+    requests_mock.get(
+        "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast",
+        json={"code": 0, "data": {}},  # missing 'records' key
+    )
+    from sg_transit_weather_mesh.assets.ingestion import sg_gov_source
+    source = sg_gov_source()
+    rows = list(source.resources["weather_forecast_24hr"]())
+    assert rows == []

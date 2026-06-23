@@ -31,7 +31,8 @@ def _fetch_json(url: str, headers: dict | None = None, timeout: int = 30) -> dic
     """GET url, return parsed JSON. Retries on 5xx/network errors; backs off on 429."""
     resp = requests.get(url, headers=headers or {}, timeout=timeout)
     if resp.status_code == 429:
-        retry_after = int(resp.headers.get("Retry-After", "60"))
+        retry_after = int(resp.headers.get("Retry-After", "5"))
+        _log.warning(f"Rate limited (429) — sleeping {retry_after}s before retry")
         _time.sleep(retry_after)
         resp.raise_for_status()  # re-raise so tenacity retries
     resp.raise_for_status()
@@ -54,6 +55,7 @@ _MP2019_POLL_URL = (
     "https://api-open.data.gov.sg/v1/public/api/datasets"
     "/d_8594ae9ff96d0c708bc2af633048edfb/poll-download"
 )
+_MAX_GEOJSON_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
 @dlt.source
@@ -103,9 +105,8 @@ def sg_gov_source():
             payload = _fetch_json(_WEATHER_V2_URL, timeout=30)
 
             if payload.get("code") != 0:
-                raise ValueError(
-                    f"data.gov.sg v2 API error: {payload.get('errorMsg', 'unknown')}"
-                )
+                _log.warning(f"weather_forecast: API returned non-zero code {payload.get('code')}")
+                return
             items = payload.get("data", {}).get("items")
             if not items:
                 _log.warning("weather_forecast: missing 'data.items' in response")
@@ -215,7 +216,6 @@ def sg_gov_source():
             try:
                 poll = _fetch_json(_MP2019_POLL_URL, timeout=30)
                 download_url = poll["data"]["url"]
-                _MAX_GEOJSON_BYTES = 100 * 1024 * 1024  # 100 MB
                 head = requests.head(download_url, timeout=10)
                 content_length = int(head.headers.get("Content-Length", "0"))
                 if content_length > _MAX_GEOJSON_BYTES:
@@ -224,8 +224,9 @@ def sg_gov_source():
                     )
                     return
                 fc = _fetch_json(download_url, timeout=120)
-            except requests.exceptions.HTTPError:
-                return  # rate-limited or API error — skip silently, retry next run
+            except requests.exceptions.HTTPError as _http_exc:
+                _log.warning(f"sg_subzone_boundaries: HTTP error on GeoJSON download: {_http_exc}")
+                return
 
             if fc.get("type") != "FeatureCollection" or not fc.get("features"):
                 _log.warning("sg_subzone_boundaries: unexpected GeoJSON shape")
