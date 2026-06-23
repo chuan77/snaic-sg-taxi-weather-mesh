@@ -64,20 +64,24 @@ def sg_gov_source():
     @dlt.resource(write_disposition="merge", primary_key=["timestamp", "latitude", "longitude"])
     def taxi_availability():
         """GeoJSON point cloud of all available taxis — one row per coordinate."""
-        url = f"{_BASE_URL_V1}/transport/taxi-availability"
-        data = _fetch_json(url, headers=_HEADERS_V1, timeout=30)
-        if not data.get("features"):
-            _log.warning("taxi_availability: missing 'features' in response")
+        try:
+            url = f"{_BASE_URL_V1}/transport/taxi-availability"
+            data = _fetch_json(url, headers=_HEADERS_V1, timeout=30)
+            if not data.get("features"):
+                _log.warning("taxi_availability: missing 'features' in response")
+                return
+            feature = data["features"][0]
+            if "properties" not in feature or "geometry" not in feature:
+                _log.warning("taxi_availability: unexpected feature shape")
+                return
+            timestamp = feature["properties"]["timestamp"]
+            for lon, lat in feature["geometry"]["coordinates"]:
+                if not (_SG_LAT[0] <= lat <= _SG_LAT[1] and _SG_LON[0] <= lon <= _SG_LON[1]):
+                    continue
+                yield {"timestamp": timestamp, "latitude": lat, "longitude": lon}
+        except Exception as _exc:
+            _log.warning(f"taxi_availability: skipping due to error: {_exc}")
             return
-        feature = data["features"][0]
-        if "properties" not in feature or "geometry" not in feature:
-            _log.warning("taxi_availability: unexpected feature shape")
-            return
-        timestamp = feature["properties"]["timestamp"]
-        for lon, lat in feature["geometry"]["coordinates"]:
-            if not (_SG_LAT[0] <= lat <= _SG_LAT[1] and _SG_LON[0] <= lon <= _SG_LON[1]):
-                continue
-            yield {"timestamp": timestamp, "latitude": lat, "longitude": lon}
 
     @dlt.resource(write_disposition="replace", primary_key=["timestamp", "area"])
     def weather_forecast():
@@ -95,40 +99,44 @@ def sg_gov_source():
             }
           }
         """
-        payload = _fetch_json(_WEATHER_V2_URL, timeout=30)
+        try:
+            payload = _fetch_json(_WEATHER_V2_URL, timeout=30)
 
-        if payload.get("code") != 0:
-            raise ValueError(
-                f"data.gov.sg v2 API error: {payload.get('errorMsg', 'unknown')}"
-            )
-        items = payload.get("data", {}).get("items")
-        if not items:
-            _log.warning("weather_forecast: missing 'data.items' in response")
-            return
-        area_meta = payload.get("data", {}).get("area_metadata", [])
-        area_locations = {
-            m["name"]: m["label_location"]
-            for m in area_meta
-        }
-        item = items[0]
-        timestamp = item["timestamp"]
-        update_timestamp = item["update_timestamp"]
-        valid_period = item["valid_period"]
-
-        for entry in item["forecasts"]:
-            area = entry["area"]
-            loc = area_locations.get(area, {})
-            yield {
-                "timestamp": timestamp,
-                "update_timestamp": update_timestamp,
-                "valid_period_start": valid_period["start"],
-                "valid_period_end": valid_period["end"],
-                "valid_period_text": valid_period["text"],
-                "area": area,
-                "forecast": entry["forecast"],
-                "latitude": loc.get("latitude"),
-                "longitude": loc.get("longitude"),
+            if payload.get("code") != 0:
+                raise ValueError(
+                    f"data.gov.sg v2 API error: {payload.get('errorMsg', 'unknown')}"
+                )
+            items = payload.get("data", {}).get("items")
+            if not items:
+                _log.warning("weather_forecast: missing 'data.items' in response")
+                return
+            area_meta = payload.get("data", {}).get("area_metadata", [])
+            area_locations = {
+                m["name"]: m["label_location"]
+                for m in area_meta
             }
+            item = items[0]
+            timestamp = item["timestamp"]
+            update_timestamp = item["update_timestamp"]
+            valid_period = item["valid_period"]
+
+            for entry in item["forecasts"]:
+                area = entry["area"]
+                loc = area_locations.get(area, {})
+                yield {
+                    "timestamp": timestamp,
+                    "update_timestamp": update_timestamp,
+                    "valid_period_start": valid_period["start"],
+                    "valid_period_end": valid_period["end"],
+                    "valid_period_text": valid_period["text"],
+                    "area": area,
+                    "forecast": entry["forecast"],
+                    "latitude": loc.get("latitude"),
+                    "longitude": loc.get("longitude"),
+                }
+        except Exception as _exc:
+            _log.warning(f"weather_forecast: skipping due to error: {_exc}")
+            return
 
     @dlt.resource(name="weather_forecast_24hr", write_disposition="replace",
                   primary_key=["fetched_at", "period_text", "region"])
@@ -138,40 +146,44 @@ def sg_gov_source():
         Yields one row per (period × region) combination so the mart can query
         by period label or region without JSON parsing.
         """
-        payload_24h = _fetch_json(_WEATHER_24H_V2_URL, timeout=30)
-        records = payload_24h.get("data", {}).get("records")
-        if not records:
-            _log.warning("weather_forecast_24hr: missing 'data.records' in response")
+        try:
+            payload_24h = _fetch_json(_WEATHER_24H_V2_URL, timeout=30)
+            records = payload_24h.get("data", {}).get("records")
+            if not records:
+                _log.warning("weather_forecast_24hr: missing 'data.records' in response")
+                return
+            rec = records[0]
+            fetched_at       = rec.get("updatedTimestamp", datetime.utcnow().isoformat())
+            valid_start      = rec.get("validPeriod", {}).get("start", "")
+            valid_end        = rec.get("validPeriod", {}).get("end", "")
+            general_forecast = rec.get("general", {}).get("forecast", {}).get("summary", "")
+            temp_low         = rec.get("general", {}).get("temperature", {}).get("low", 0)
+            temp_high        = rec.get("general", {}).get("temperature", {}).get("high", 0)
+            rh_low           = rec.get("general", {}).get("relativeHumidity", {}).get("low", 0)
+            rh_high          = rec.get("general", {}).get("relativeHumidity", {}).get("high", 0)
+            for period in rec.get("periods", []):
+                period_text  = period.get("timePeriod", {}).get("text", "")
+                period_start = period.get("timePeriod", {}).get("start", "")
+                period_end   = period.get("timePeriod", {}).get("end", "")
+                for region, rdata in period.get("regions", {}).items():
+                    yield {
+                        "fetched_at":       fetched_at,
+                        "valid_start":      valid_start,
+                        "valid_end":        valid_end,
+                        "general_forecast": general_forecast,
+                        "temp_low":         temp_low,
+                        "temp_high":        temp_high,
+                        "rh_low":           rh_low,
+                        "rh_high":          rh_high,
+                        "period_text":      period_text,
+                        "period_start":     period_start,
+                        "period_end":       period_end,
+                        "region":           region,
+                        "forecast":         rdata.get("forecast", ""),
+                    }
+        except Exception as _exc:
+            _log.warning(f"weather_forecast_24hr: skipping due to error: {_exc}")
             return
-        rec = records[0]
-        fetched_at       = rec.get("updatedTimestamp", datetime.utcnow().isoformat())
-        valid_start      = rec.get("validPeriod", {}).get("start", "")
-        valid_end        = rec.get("validPeriod", {}).get("end", "")
-        general_forecast = rec.get("general", {}).get("forecast", {}).get("summary", "")
-        temp_low         = rec.get("general", {}).get("temperature", {}).get("low", 0)
-        temp_high        = rec.get("general", {}).get("temperature", {}).get("high", 0)
-        rh_low           = rec.get("general", {}).get("relativeHumidity", {}).get("low", 0)
-        rh_high          = rec.get("general", {}).get("relativeHumidity", {}).get("high", 0)
-        for period in rec.get("periods", []):
-            period_text  = period.get("timePeriod", {}).get("text", "")
-            period_start = period.get("timePeriod", {}).get("start", "")
-            period_end   = period.get("timePeriod", {}).get("end", "")
-            for region, rdata in period.get("regions", {}).items():
-                yield {
-                    "fetched_at":       fetched_at,
-                    "valid_start":      valid_start,
-                    "valid_end":        valid_end,
-                    "general_forecast": general_forecast,
-                    "temp_low":         temp_low,
-                    "temp_high":        temp_high,
-                    "rh_low":           rh_low,
-                    "rh_high":          rh_high,
-                    "period_text":      period_text,
-                    "period_start":     period_start,
-                    "period_end":       period_end,
-                    "region":           region,
-                    "forecast":         rdata.get("forecast", ""),
-                }
 
     @dlt.resource(
         name="sg_subzone_boundaries",
@@ -184,42 +196,46 @@ def sg_gov_source():
         """
         import json as _json
         try:
-            conn = duckdb.connect(_DB_PATH, read_only=True)
             try:
-                existing = conn.execute(
-                    "SELECT COUNT(*) FROM raw.sg_subzone_boundaries"
-                ).fetchone()[0]
-                non_null_geom = conn.execute(
-                    "SELECT COUNT(*) FROM raw.sg_subzone_boundaries WHERE geometry IS NOT NULL"
-                ).fetchone()[0]
-            finally:
-                conn.close()
-            if existing >= 300 and non_null_geom >= 300:
+                conn = duckdb.connect(_DB_PATH, read_only=True)
+                try:
+                    existing = conn.execute(
+                        "SELECT COUNT(*) FROM raw.sg_subzone_boundaries"
+                    ).fetchone()[0]
+                    non_null_geom = conn.execute(
+                        "SELECT COUNT(*) FROM raw.sg_subzone_boundaries WHERE geometry IS NOT NULL"
+                    ).fetchone()[0]
+                finally:
+                    conn.close()
+                if existing >= 300 and non_null_geom >= 300:
+                    return
+            except Exception:
+                pass  # table not yet created — proceed with download
+
+            try:
+                poll = _fetch_json(_MP2019_POLL_URL, timeout=30)
+                download_url = poll["data"]["url"]
+                fc = _fetch_json(download_url, timeout=120)
+            except requests.exceptions.HTTPError:
+                return  # rate-limited or API error — skip silently, retry next run
+
+            if fc.get("type") != "FeatureCollection" or not fc.get("features"):
+                _log.warning("sg_subzone_boundaries: unexpected GeoJSON shape")
                 return
-        except Exception:
-            pass  # table not yet created — proceed with download
-
-        try:
-            poll = _fetch_json(_MP2019_POLL_URL, timeout=30)
-            download_url = poll["data"]["url"]
-            fc = _fetch_json(download_url, timeout=120)
-        except requests.exceptions.HTTPError:
-            return  # rate-limited or API error — skip silently, retry next run
-
-        if fc.get("type") != "FeatureCollection" or not fc.get("features"):
-            _log.warning("sg_subzone_boundaries: unexpected GeoJSON shape")
+            for feature in fc.get("features", []):
+                props = feature.get("properties", {})
+                yield {
+                    "subzone_code":  str(props.get("SUBZONE_C", "")),
+                    "subzone_name":  str(props.get("SUBZONE_N", "")),
+                    "planning_area": str(props.get("PLN_AREA_N", "")),
+                    "region":        str(props.get("REGION_N", "")),
+                    "ca_indicator":  str(props.get("CA_IND", "")),
+                    "shape_area_m2": float(props.get("SHAPE.AREA") or 0.0),
+                    "geometry_json": _json.dumps(feature.get("geometry", {})),
+                }
+        except Exception as _exc:
+            _log.warning(f"sg_subzone_boundaries: skipping due to error: {_exc}")
             return
-        for feature in fc.get("features", []):
-            props = feature.get("properties", {})
-            yield {
-                "subzone_code":  str(props.get("SUBZONE_C", "")),
-                "subzone_name":  str(props.get("SUBZONE_N", "")),
-                "planning_area": str(props.get("PLN_AREA_N", "")),
-                "region":        str(props.get("REGION_N", "")),
-                "ca_indicator":  str(props.get("CA_IND", "")),
-                "shape_area_m2": float(props.get("SHAPE.AREA") or 0.0),
-                "geometry_json": _json.dumps(feature.get("geometry", {})),
-            }
 
     return taxi_availability, weather_forecast, weather_forecast_24hr, sg_subzone_boundaries
 

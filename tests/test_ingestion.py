@@ -2,7 +2,6 @@
 import pytest
 import requests_mock
 import dlt
-from dlt.extract.exceptions import ResourceExtractionError
 from sg_transit_weather_mesh.utils import load_config
 from sg_transit_weather_mesh.assets.ingestion import (
     sg_gov_source,
@@ -142,8 +141,8 @@ def test_weather_resource_yields_flat_rows_with_area_coordinates():
         assert record["valid_period_text"] == "8.00 am to 10.00 am"
 
 
-def test_weather_resource_rejects_non_zero_api_code():
-    """Verifies that a v2 API error code (non-zero) raises ValueError."""
+def test_weather_resource_returns_empty_on_non_zero_api_code():
+    """Verifies that a v2 API error code (non-zero) causes the resource to yield 0 rows (not raise)."""
     config = load_config()
     base_url = config["api"]["base_url"]
 
@@ -154,8 +153,8 @@ def test_weather_resource_rejects_non_zero_api_code():
         mock.get(_WEATHER_V2_URL, json=error_response)
 
         source = sg_gov_source()
-        with pytest.raises(ResourceExtractionError):
-            list(source.resources["weather_forecast"])
+        rows = list(source.resources["weather_forecast"])
+        assert rows == [], "weather_forecast must yield 0 rows on API error code"
 
 
 def test_multiple_coordinates_yield_multiple_taxi_rows():
@@ -189,7 +188,7 @@ def test_multiple_coordinates_yield_multiple_taxi_rows():
 
 
 def test_api_ingestion_contract_failure():
-    """Ensures our ingestion layers flag errors if the API throws a 500 error."""
+    """Ensures taxi_availability yields 0 rows (does not raise) when the API returns 500."""
     config = load_config()
     base_url = config["api"]["base_url"]
 
@@ -197,8 +196,8 @@ def test_api_ingestion_contract_failure():
         mock.get(f"{base_url}/transport/taxi-availability", status_code=500)
 
         source = sg_gov_source()
-        with pytest.raises(ResourceExtractionError):
-            list(source.resources["taxi_availability"])
+        rows = list(source.resources["taxi_availability"])
+        assert rows == [], "taxi_availability must yield 0 rows on HTTP 500 (not raise)"
 
 
 def test_pipeline_rejects_credentials_kwarg():
@@ -370,3 +369,41 @@ def test_subzone_boundaries_cache_guard_rejects_null_geometries(tmp_path):
             except Exception:
                 pass  # asset may error after fake download — we only care about download_called
             assert download_called, "Asset must attempt re-download when geometries are NULL"
+
+
+def test_pipeline_continues_after_one_resource_fails(requests_mock, tmp_path):
+    """If weather_forecast raises, taxi_availability rows must still load."""
+    import duckdb, dlt
+    from unittest.mock import patch
+
+    db_path = str(tmp_path / "test.duckdb")
+    # Taxi API succeeds
+    requests_mock.get(
+        "https://api.data.gov.sg/v1/transport/taxi-availability",
+        json={
+            "features": [{"properties": {"timestamp": "2024-01-01T00:00:00"}, "geometry": {"coordinates": [[103.8, 1.3]]}}]
+        },
+    )
+    # Weather API fails with 500
+    requests_mock.get(
+        "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast",
+        status_code=500,
+    )
+    requests_mock.get(
+        "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast",
+        status_code=500,
+    )
+
+    with patch("sg_transit_weather_mesh.assets.ingestion._DB_PATH", db_path):
+        from sg_transit_weather_mesh.assets.ingestion import sg_gov_source
+        pipeline = dlt.pipeline(
+            pipeline_name="test_isolation_t3",
+            destination=dlt.destinations.duckdb(credentials=db_path),
+            dataset_name="raw",
+        )
+        pipeline.run(sg_gov_source())  # must NOT raise
+
+    conn = duckdb.connect(db_path, read_only=True)
+    count = conn.execute("SELECT COUNT(*) FROM raw.taxi_availability").fetchone()[0]
+    conn.close()
+    assert count > 0, "taxi rows must be present even when weather resources fail"
