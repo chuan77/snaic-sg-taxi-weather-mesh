@@ -31,7 +31,7 @@ def sg_gov_source():
     _SG_LAT = (1.1, 1.5)
     _SG_LON = (103.5, 104.1)
 
-    @dlt.resource(write_disposition="append", primary_key=["timestamp", "latitude", "longitude"])
+    @dlt.resource(write_disposition="merge", primary_key=["timestamp", "latitude", "longitude"])
     def taxi_availability():
         """GeoJSON point cloud of all available taxis — one row per coordinate."""
         url = f"{_BASE_URL_V1}/transport/taxi-availability"

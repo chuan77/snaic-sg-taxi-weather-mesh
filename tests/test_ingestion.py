@@ -223,6 +223,16 @@ def test_pipeline_construction_accepts_valid_args(tmp_path):
     assert pipeline.dataset_name == "raw"
 
 
+def test_taxi_availability_write_disposition_is_merge():
+    """Rerunning with same timestamp+coords must not produce duplicate rows."""
+    source = sg_gov_source()
+    taxi_availability = source.resources["taxi_availability"]
+    # dlt resource stores write_disposition on the resource object
+    assert taxi_availability.write_disposition == "merge", (
+        "taxi_availability must use 'merge' to prevent duplicate rows on rerun"
+    )
+
+
 def test_ingest_asset_runs_end_to_end(tmp_path, monkeypatch):
     """Smoke-tests the full Dagster asset: pipeline construction and run against a temp DuckDB."""
     config = load_config()
