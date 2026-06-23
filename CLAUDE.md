@@ -36,6 +36,11 @@ uv run pytest tests -v
 
 # TypeScript type check (must pass with 0 errors)
 cd web-dashboard && npx tsc --noEmit
+
+# Docker Compose — run the full stack in containers
+docker compose up -d --build     # build and start all services
+docker compose logs -f dagster   # tail Dagster logs
+docker compose down              # stop all services
 ```
 
 Service ports:
@@ -46,7 +51,7 @@ Service ports:
 | Vite dev server | 5173 |
 | MLflow tracking server | 5050 |
 | FastAPI / uvicorn | 8000 |
-| LMStudio (local LLM) | 1234 |
+| Docker Model Runner (LLM) | 12434 |
 
 ---
 
@@ -113,11 +118,15 @@ Density grid accumulation and box blur run once per data update (every 5 min) �
 ### DBSCAN Parameters
 `eps=0.0003` (≈ 1.9 km), `min_samples=10`, `metric='haversine'`. **The eps value is in radians**, not degrees — haversine DBSCAN in sklearn expects radian input after `np.radians(coords)`. Using degrees (e.g. `eps=0.009`) gives an effective radius of ~57 km and merges all Singapore into one cluster.
 
-### LMStudio LLM
-`ask_llm(system_prompt, user_input)` in `utils.py` POSTs to `http://localhost:1234/api/v1/chat`. Returns empty string on any exception (timeout, connection refused, bad response). All callers must provide a fallback string. LLM features degrade gracefully when LMStudio is not running. The function is decorated with `@mlflow.trace(span_type=SpanType.LLM)` so calls are visible in the MLflow UI when tracing is enabled.
+### LLM Integration
+`ask_llm(system_prompt, user_input)` in `utils.py` POSTs to the Docker Model Runner endpoint (`http://localhost:12434/engines/v1` by default). Override via env vars `LLM_BASE_URL` (endpoint) and `LLM_MODEL` (model name, defaults to `ai/gemma4:E4B`). Returns empty string on any exception — all callers must provide a fallback string. LLM features degrade gracefully when the model runner is unavailable. The function is decorated with `@mlflow.trace(span_type=SpanType.LLM)` so calls are visible in the MLflow UI when tracing is enabled.
+
+In Docker Compose, the `dagster` and `frontend` services declare `models: [llm]` to bind to the Docker-hosted model runner; `LLM_BASE_URL` is set to `http://model-runner.docker.internal/engines/v1`.
 
 ### MLflow Observability
 `_train_gbr_zone()` in `analytics.py` is decorated with `@mlflow.trace()` (CHAIN span) so each zone's training run appears as a nested span in the MLflow UI. `configure_mlflow_tracking()` in `utils.py` sets the tracking URI from `MLFLOW_TRACKING_URI` env var, falling back to `config.yaml`. `get_mlflow_config()` returns `None` when `mlflow.enabled: false` in config, causing all MLflow calls to skip silently. `taxi_clusters_export` logs DBSCAN metrics (silhouette_score, n_clusters, noise_fraction) on each run.
+
+**Docker healthcheck:** `docker-compose.yml` adds a `healthcheck` to the `mlflow` service (`curl http://localhost:5050/health`) and makes `dagster` wait with `depends_on: condition: service_healthy`. This prevents the race condition where `demand_forecast_export` fires before MLflow is ready, silently dropping the `sg-taxi-demand-forecast` experiment. `Dockerfile` installs `curl` for the probe.
 
 ### GBR Demand Forecast
 `_train_gbr_zone(zone_id, zone_name, counts, sufficient_data)` in `assets/analytics.py`. Features: last LAG=6 taxi counts. Target: count at HORIZON=6 steps ahead (30 min). Params: `n_estimators=50, max_depth=3, random_state=42`, 80/20 train-test split. Returns `(model, train_data, mae)`. Requires ≥ LAG+HORIZON+1 = 13 samples; falls back to `sufficient_data=False` and skips registry registration for that zone. One model per zone is registered to MLflow under the `demand_forecast` experiment after each Dagster run.
@@ -159,3 +168,11 @@ All files live in `web-dashboard/public/data/` and are gitignored — generated 
 - `GET /experiments/{name}` returns 404 for unknown experiment names
 - `GET /experiments/{name}` returns 503 when MLflow is disabled
 - `GET /models` returns 503 when MLflow is disabled
+
+`tests/test_analytics.py` — analytics unit tests (SDI computation, surge scoring, forecast helpers)
+
+`tests/test_ingestion.py` — API contract response checks against LTA and NEA response shapes
+
+`tests/test_nowcast_export.py` — NEA nowcast logic: area-region mapping, intensity classification, timeline derivation, alert generation
+
+`tests/test_dashboard_data.py` — JSON export schema validation for all seven `public/data/` files
