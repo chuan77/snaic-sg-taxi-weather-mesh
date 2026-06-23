@@ -138,3 +138,19 @@ def test_make_cluster_run_name_with_none_falls_back():
     from sg_transit_weather_mesh.assets.analytics import _make_cluster_run_name
     name = _make_cluster_run_name(None)
     assert isinstance(name, str) and len(name) > 0
+
+
+def test_make_forecast_run_name_is_deterministic():
+    """Same fetched_at value must always produce the same GBR run name."""
+    from sg_transit_weather_mesh.assets.analytics import _make_forecast_run_name
+    ts = "2024-06-23 10:00:00"
+    assert _make_forecast_run_name(ts) == _make_forecast_run_name(ts)
+    assert _make_forecast_run_name(ts).startswith("gbr_")
+    assert _make_forecast_run_name(ts) != _make_forecast_run_name("2024-06-23 10:05:00")
+
+
+def test_make_forecast_run_name_with_none_falls_back():
+    """None fetched_at must still produce a valid non-empty string."""
+    from sg_transit_weather_mesh.assets.analytics import _make_forecast_run_name
+    name = _make_forecast_run_name(None)
+    assert isinstance(name, str) and len(name) > 0

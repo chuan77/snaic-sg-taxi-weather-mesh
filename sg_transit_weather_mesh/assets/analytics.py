@@ -422,6 +422,14 @@ def _make_cluster_run_name(fetched_at) -> str:
     return f"dbscan_{ts}"
 
 
+def _make_forecast_run_name(fetched_at) -> str:
+    """Return a deterministic MLflow run name from the mart's max fetched_at."""
+    if fetched_at is None:
+        return "gbr_unknown"
+    ts = str(fetched_at).replace(" ", "T").replace(":", "").replace("-", "")[:15]
+    return f"gbr_{ts}"
+
+
 def _classify_areas(rows: list, has_valid_period: bool) -> tuple:
     """Return (classified_areas, vp_start, vp_end, vp_text, update_ts)."""
     areas: list[dict] = []
@@ -1176,6 +1184,13 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
             ]).fetchall()
             count_map = {r[0]: int(r[1]) for r in rows}
             zone_counts[z["id"]] = [count_map.get(ts, 0) for ts in timestamps]
+        _data_ts = None
+        try:
+            _data_ts = conn.execute(
+                "SELECT MAX(fetched_at) FROM mart.fct_taxi_weather_trends"
+            ).fetchone()[0]
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -1195,14 +1210,14 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     # cannot override the global active experiment between Block 1 and here.
     if _experiment is not None:
         try:
-            with mlflow.start_run(
-                run_name=f"gbr_{datetime.now().strftime('%Y%m%dT%H%M%S')}",
-                experiment_id=_experiment.experiment_id,
-            ):
-                mlflow.log_params({
-                    "n_estimators": 50, "max_depth": 3, "random_state": 42,
-                    "lag": _FORECAST_LAG, "horizon": _FORECAST_HORIZON, "train_split": 0.8,
-                })
+            _run_name = _make_forecast_run_name(_data_ts)
+            _existing = mlflow.search_runs(
+                experiment_ids=[_experiment.experiment_id],
+                filter_string=f"tags.mlflow.runName = '{_run_name}'",
+                max_results=1,
+            )
+            if not _existing.empty:
+                _log.info(f"MLflow run '{_run_name}' already exists — skipping duplicate logging")
                 for z in HOTSPOT_ZONES:
                     result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
                     zones_out.append(result["zone_out"])
@@ -1212,21 +1227,39 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
                     if result["mae"] is not None:
                         all_maes.append(result["mae"])
                 model_mae = float(np.mean(all_maes)) if all_maes else None
-                if model_mae is not None:
-                    mlflow.log_metric("mean_mae_across_zones", model_mae)
-                mlflow.log_metric("zones_with_data", len(all_maes))
-                mlflow.set_tag("sufficient_data", str(sufficient_data))
-                mlflow.set_tag("pipeline", "demand_forecast_export")
-                if _last_model is not None and _last_zone_X is not None:
-                    try:
-                        mlflow.sklearn.log_model(
-                            sk_model=_last_model,
-                            artifact_path="model",
-                            registered_model_name=_mlflow_cfg["registry"]["demand_forecast"],
-                            input_example=_last_zone_X[-1:],
-                        )
-                    except Exception:
-                        pass
+            else:
+                with mlflow.start_run(
+                    run_name=_run_name,
+                    experiment_id=_experiment.experiment_id,
+                ):
+                    mlflow.log_params({
+                        "n_estimators": 50, "max_depth": 3, "random_state": 42,
+                        "lag": _FORECAST_LAG, "horizon": _FORECAST_HORIZON, "train_split": 0.8,
+                    })
+                    for z in HOTSPOT_ZONES:
+                        result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
+                        zones_out.append(result["zone_out"])
+                        if result["model"] is not None:
+                            _last_model = result["model"]
+                            _last_zone_X = result["X_train"]
+                        if result["mae"] is not None:
+                            all_maes.append(result["mae"])
+                    model_mae = float(np.mean(all_maes)) if all_maes else None
+                    if model_mae is not None:
+                        mlflow.log_metric("mean_mae_across_zones", model_mae)
+                    mlflow.log_metric("zones_with_data", len(all_maes))
+                    mlflow.set_tag("sufficient_data", str(sufficient_data))
+                    mlflow.set_tag("pipeline", "demand_forecast_export")
+                    if _last_model is not None and _last_zone_X is not None:
+                        try:
+                            mlflow.sklearn.log_model(
+                                sk_model=_last_model,
+                                artifact_path="model",
+                                registered_model_name=_mlflow_cfg["registry"]["demand_forecast"],
+                                input_example=_last_zone_X[-1:],
+                            )
+                        except Exception:
+                            pass
         except Exception as e:
             _log.warning(f"MLflow run failed to complete: {e}")
     else:
