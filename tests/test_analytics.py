@@ -122,3 +122,19 @@ def test_analytics_asset_metadata_is_int(tmp_path, monkeypatch):
     row_count = output.metadata["total_analytics_rows"].value
     assert isinstance(row_count, int), f"Expected int, got {type(row_count)}"
     assert row_count == 1
+
+
+def test_make_cluster_run_name_is_deterministic():
+    """Same fetched_at value must always produce the same run name string."""
+    from sg_transit_weather_mesh.assets.analytics import _make_cluster_run_name
+    ts = "2024-06-23 10:00:00"
+    assert _make_cluster_run_name(ts) == _make_cluster_run_name(ts)
+    assert _make_cluster_run_name(ts).startswith("dbscan_")
+    assert _make_cluster_run_name(ts) != _make_cluster_run_name("2024-06-23 10:05:00")
+
+
+def test_make_cluster_run_name_with_none_falls_back():
+    """None fetched_at must still produce a valid non-empty string."""
+    from sg_transit_weather_mesh.assets.analytics import _make_cluster_run_name
+    name = _make_cluster_run_name(None)
+    assert isinstance(name, str) and len(name) > 0

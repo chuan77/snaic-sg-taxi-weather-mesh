@@ -413,6 +413,15 @@ def _fmt_display_time(dt: datetime) -> str:
     return f"{h}:{dt.minute:02d} {'AM' if dt.hour < 12 else 'PM'}"
 
 
+def _make_cluster_run_name(fetched_at) -> str:
+    """Return a deterministic MLflow run name from the mart's max fetched_at."""
+    if fetched_at is None:
+        return "dbscan_unknown"
+    # Normalise to a compact timestamp string regardless of input type
+    ts = str(fetched_at).replace(" ", "T").replace(":", "").replace("-", "")[:15]
+    return f"dbscan_{ts}"
+
+
 def _classify_areas(rows: list, has_valid_period: bool) -> tuple:
     """Return (classified_areas, vp_start, vp_end, vp_text, update_ts)."""
     areas: list[dict] = []
@@ -841,6 +850,13 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         snapshot_ts = conn.execute(
             "SELECT MAX(timestamp) FROM raw.taxi_availability"
         ).fetchone()[0]
+        _data_ts = None
+        try:
+            _data_ts = conn.execute(
+                "SELECT MAX(fetched_at) FROM mart.fct_taxi_weather_trends"
+            ).fetchone()[0]
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -867,17 +883,26 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
                 import mlflow
                 configure_mlflow_tracking(_mlflow_cfg)
                 mlflow.set_experiment(_mlflow_cfg["experiments"]["taxi_clusters"])
-                with mlflow.start_run(run_name=f"dbscan_{datetime.now().strftime('%Y%m%dT%H%M%S')}"):
-                    mlflow.log_params({
-                        "min_samples": 10, "metric": "haversine",
-                        "algorithm": "ball_tree", "coord_count": len(coords),
-                    })
-                    mlflow.log_metric("silhouette_score", round(sil_score, 4))
-                    mlflow.log_metric("n_clusters", _n_clusters)
-                    if labels is not None:
-                        mlflow.log_metric("noise_fraction",
-                            round(float((labels == -1).sum()) / len(labels), 4))
-                    mlflow.set_tag("pipeline", "taxi_clusters_export")
+                _run_name = _make_cluster_run_name(_data_ts)
+                _existing = mlflow.search_runs(
+                    experiment_names=[_mlflow_cfg["experiments"]["taxi_clusters"]],
+                    filter_string=f"tags.mlflow.runName = '{_run_name}'",
+                    max_results=1,
+                )
+                if not _existing.empty:
+                    pass  # run already logged for this data snapshot — skip
+                else:
+                    with mlflow.start_run(run_name=_run_name):
+                        mlflow.log_params({
+                            "min_samples": 10, "metric": "haversine",
+                            "algorithm": "ball_tree", "coord_count": len(coords),
+                        })
+                        mlflow.log_metric("silhouette_score", round(sil_score, 4))
+                        mlflow.log_metric("n_clusters", _n_clusters)
+                        if labels is not None:
+                            mlflow.log_metric("noise_fraction",
+                                round(float((labels == -1).sum()) / len(labels), 4))
+                        mlflow.set_tag("pipeline", "taxi_clusters_export")
             except Exception:
                 pass
 
