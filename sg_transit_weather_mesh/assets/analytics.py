@@ -858,13 +858,7 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         snapshot_ts = conn.execute(
             "SELECT MAX(timestamp) FROM raw.taxi_availability"
         ).fetchone()[0]
-        _data_ts = None
-        try:
-            _data_ts = conn.execute(
-                "SELECT MAX(fetched_at) FROM mart.fct_taxi_weather_trends"
-            ).fetchone()[0]
-        except Exception:
-            pass
+        _data_ts = snapshot_ts
     finally:
         conn.close()
 
@@ -898,7 +892,7 @@ def taxi_clusters_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
                     max_results=1,
                 )
                 if not _existing.empty:
-                    pass  # run already logged for this data snapshot — skip
+                    _log.info(f"MLflow run '{_run_name}' already exists — skipping duplicate logging")
                 else:
                     with mlflow.start_run(run_name=_run_name):
                         mlflow.log_params({
@@ -1218,14 +1212,19 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
             )
             if not _existing.empty:
                 _log.info(f"MLflow run '{_run_name}' already exists — skipping duplicate logging")
-                for z in HOTSPOT_ZONES:
-                    result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
-                    zones_out.append(result["zone_out"])
-                    if result["model"] is not None:
-                        _last_model = result["model"]
-                        _last_zone_X = result["X_train"]
-                    if result["mae"] is not None:
-                        all_maes.append(result["mae"])
+                with mlflow.start_run(
+                    run_name=f"{_run_name}_retrain",
+                    experiment_id=_experiment.experiment_id,
+                    tags={"skip_logging": "true"},
+                ):
+                    for z in HOTSPOT_ZONES:
+                        result = _train_gbr_zone(z["id"], z["name"], zone_counts[z["id"]], sufficient_data)
+                        zones_out.append(result["zone_out"])
+                        if result["model"] is not None:
+                            _last_model = result["model"]
+                            _last_zone_X = result["X_train"]
+                        if result["mae"] is not None:
+                            all_maes.append(result["mae"])
                 model_mae = float(np.mean(all_maes)) if all_maes else None
             else:
                 with mlflow.start_run(
