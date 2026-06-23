@@ -263,6 +263,41 @@ def test_ingest_asset_runs_end_to_end(tmp_path, monkeypatch):
     assert result is not None
 
 
+def test_fetch_json_retries_on_500(requests_mock):
+    """500 errors must be retried up to 3 times before raising."""
+    requests_mock.get("https://example.com/api", [
+        {"status_code": 500},
+        {"status_code": 500},
+        {"json": {"ok": True}, "status_code": 200},
+    ])
+    from sg_transit_weather_mesh.assets.ingestion import _fetch_json
+    result = _fetch_json("https://example.com/api")
+    assert result == {"ok": True}
+    assert requests_mock.call_count == 3
+
+
+def test_fetch_json_backs_off_on_429(requests_mock):
+    """429 must trigger a backoff-then-retry, not an immediate raise."""
+    requests_mock.get("https://example.com/api", [
+        {"status_code": 429, "headers": {"Retry-After": "1"}},
+        {"json": {"ok": True}, "status_code": 200},
+    ])
+    from sg_transit_weather_mesh.assets.ingestion import _fetch_json
+    result = _fetch_json("https://example.com/api")
+    assert result == {"ok": True}
+    assert requests_mock.call_count == 2
+
+
+def test_fetch_json_raises_immediately_on_403(requests_mock):
+    """403 must raise HTTPError immediately — no retry."""
+    requests_mock.get("https://example.com/api", status_code=403)
+    from sg_transit_weather_mesh.assets.ingestion import _fetch_json
+    import requests as req
+    with pytest.raises(req.exceptions.HTTPError):
+        _fetch_json("https://example.com/api")
+    assert requests_mock.call_count == 1
+
+
 def test_subzone_boundaries_cache_guard_rejects_null_geometries(tmp_path):
     """Cache guard must re-download if geometry column has NULLs even when row count >= 300."""
     import duckdb

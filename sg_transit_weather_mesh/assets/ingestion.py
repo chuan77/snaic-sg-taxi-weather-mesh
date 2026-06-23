@@ -2,10 +2,37 @@
 import dlt
 import duckdb
 import requests
+import time as _time
 from datetime import datetime
 from pathlib import Path
 from dagster import asset, Output
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from ..utils import load_config
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Retry on 5xx, connection errors, and timeouts — but not 4xx except 429."""
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = exc.response.status_code if exc.response is not None else 0
+        return status == 429 or status >= 500
+    return isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+
+
+@retry(
+    retry=retry_if_exception(_is_retryable),
+    stop=stop_after_attempt(4),           # 1 initial + 3 retries
+    wait=wait_exponential(multiplier=2, min=2, max=60),
+    reraise=True,
+)
+def _fetch_json(url: str, headers: dict | None = None, timeout: int = 30) -> dict:
+    """GET url, return parsed JSON. Retries on 5xx/network errors; backs off on 429."""
+    resp = requests.get(url, headers=headers or {}, timeout=timeout)
+    if resp.status_code == 429:
+        retry_after = int(resp.headers.get("Retry-After", "60"))
+        _time.sleep(retry_after)
+        resp.raise_for_status()  # re-raise so tenacity retries
+    resp.raise_for_status()
+    return resp.json()
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _DB_PATH = str(_PROJECT_ROOT / "data" / "warehouse.duckdb")
@@ -35,9 +62,7 @@ def sg_gov_source():
     def taxi_availability():
         """GeoJSON point cloud of all available taxis — one row per coordinate."""
         url = f"{_BASE_URL_V1}/transport/taxi-availability"
-        response = requests.get(url, headers=_HEADERS_V1, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+        data = _fetch_json(url, headers=_HEADERS_V1, timeout=30)
         if not data.get("features"):
             return
         feature = data["features"][0]
@@ -63,9 +88,7 @@ def sg_gov_source():
             }
           }
         """
-        response = requests.get(_WEATHER_V2_URL, timeout=30)
-        response.raise_for_status()
-        payload = response.json()
+        payload = _fetch_json(_WEATHER_V2_URL, timeout=30)
 
         if payload.get("code") != 0:
             raise ValueError(
@@ -105,9 +128,7 @@ def sg_gov_source():
         Yields one row per (period × region) combination so the mart can query
         by period label or region without JSON parsing.
         """
-        resp = requests.get(_WEATHER_24H_V2_URL, timeout=30)
-        resp.raise_for_status()
-        records = resp.json().get("data", {}).get("records", [])
+        records = _fetch_json(_WEATHER_24H_V2_URL, timeout=30).get("data", {}).get("records", [])
         if not records:
             return
         rec = records[0]
@@ -167,12 +188,9 @@ def sg_gov_source():
             pass  # table not yet created — proceed with download
 
         try:
-            poll = requests.get(_MP2019_POLL_URL, timeout=30)
-            poll.raise_for_status()
-            download_url = poll.json()["data"]["url"]
-            geojson_resp = requests.get(download_url, timeout=120)
-            geojson_resp.raise_for_status()
-            fc = geojson_resp.json()
+            poll = _fetch_json(_MP2019_POLL_URL, timeout=30)
+            download_url = poll["data"]["url"]
+            fc = _fetch_json(download_url, timeout=120)
         except requests.exceptions.HTTPError:
             return  # rate-limited or API error — skip silently, retry next run
 
