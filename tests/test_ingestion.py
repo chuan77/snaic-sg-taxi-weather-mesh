@@ -298,6 +298,36 @@ def test_fetch_json_raises_immediately_on_403(requests_mock):
     assert requests_mock.call_count == 1
 
 
+def test_taxi_availability_returns_empty_on_missing_features_key(requests_mock):
+    """If API returns JSON without 'features', resource must yield 0 rows (not raise)."""
+    config = load_config()
+    base_url = config["api"]["base_url"]
+    requests_mock.get(
+        f"{base_url}/transport/taxi-availability",
+        json={"unexpected": "shape"},
+    )
+    source = sg_gov_source()
+    rows = list(source.resources["taxi_availability"])
+    assert rows == []
+
+
+def test_weather_forecast_returns_empty_on_missing_items_key(requests_mock):
+    """If API returns JSON without 'items', resource must yield 0 rows (not raise)."""
+    config = load_config()
+    base_url = config["api"]["base_url"]
+    requests_mock.get(
+        f"{base_url}/transport/taxi-availability",
+        json=MOCK_TAXI_RESPONSE,
+    )
+    requests_mock.get(
+        _WEATHER_V2_URL,
+        json={"code": 0, "data": {}},  # missing 'items' key
+    )
+    source = sg_gov_source()
+    rows = list(source.resources["weather_forecast"])
+    assert rows == []
+
+
 def test_subzone_boundaries_cache_guard_rejects_null_geometries(tmp_path):
     """Cache guard must re-download if geometry column has NULLs even when row count >= 300."""
     import duckdb

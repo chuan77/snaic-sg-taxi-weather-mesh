@@ -1,4 +1,5 @@
 # sg_transit_weather_mesh/assets/ingestion.py
+import logging
 import dlt
 import duckdb
 import requests
@@ -8,6 +9,8 @@ from pathlib import Path
 from dagster import asset, Output
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from ..utils import load_config
+
+_log = logging.getLogger(__name__)
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -64,8 +67,12 @@ def sg_gov_source():
         url = f"{_BASE_URL_V1}/transport/taxi-availability"
         data = _fetch_json(url, headers=_HEADERS_V1, timeout=30)
         if not data.get("features"):
+            _log.warning("taxi_availability: missing 'features' in response")
             return
         feature = data["features"][0]
+        if "properties" not in feature or "geometry" not in feature:
+            _log.warning("taxi_availability: unexpected feature shape")
+            return
         timestamp = feature["properties"]["timestamp"]
         for lon, lat in feature["geometry"]["coordinates"]:
             if not (_SG_LAT[0] <= lat <= _SG_LAT[1] and _SG_LON[0] <= lon <= _SG_LON[1]):
@@ -94,13 +101,16 @@ def sg_gov_source():
             raise ValueError(
                 f"data.gov.sg v2 API error: {payload.get('errorMsg', 'unknown')}"
             )
-
-        data = payload["data"]
+        items = payload.get("data", {}).get("items")
+        if not items:
+            _log.warning("weather_forecast: missing 'data.items' in response")
+            return
+        area_meta = payload.get("data", {}).get("area_metadata", [])
         area_locations = {
             m["name"]: m["label_location"]
-            for m in data["area_metadata"]
+            for m in area_meta
         }
-        item = data["items"][0]
+        item = items[0]
         timestamp = item["timestamp"]
         update_timestamp = item["update_timestamp"]
         valid_period = item["valid_period"]
@@ -128,8 +138,10 @@ def sg_gov_source():
         Yields one row per (period × region) combination so the mart can query
         by period label or region without JSON parsing.
         """
-        records = _fetch_json(_WEATHER_24H_V2_URL, timeout=30).get("data", {}).get("records", [])
+        payload_24h = _fetch_json(_WEATHER_24H_V2_URL, timeout=30)
+        records = payload_24h.get("data", {}).get("records")
         if not records:
+            _log.warning("weather_forecast_24hr: missing 'data.records' in response")
             return
         rec = records[0]
         fetched_at       = rec.get("updatedTimestamp", datetime.utcnow().isoformat())
@@ -194,6 +206,9 @@ def sg_gov_source():
         except requests.exceptions.HTTPError:
             return  # rate-limited or API error — skip silently, retry next run
 
+        if fc.get("type") != "FeatureCollection" or not fc.get("features"):
+            _log.warning("sg_subzone_boundaries: unexpected GeoJSON shape")
+            return
         for feature in fc.get("features", []):
             props = feature.get("properties", {})
             yield {
