@@ -256,6 +256,7 @@ def test_ingest_asset_runs_end_to_end(tmp_path, monkeypatch):
         mock.get(_WEATHER_V2_URL, json=MOCK_WEATHER_RESPONSE_V2)
         mock.get(_WEATHER_24H_V2_URL, json=MOCK_WEATHER_24H_RESPONSE)
         mock.get(_MP2019_POLL_URL, json=_MOCK_MP2019_POLL)
+        mock.head(_PRESIGNED_URL, headers={"Content-Length": "1024"})
         mock.get(_PRESIGNED_URL, json=_MOCK_MP2019_GEOJSON)
         result = ingest_sg_raw_data()
 
@@ -358,6 +359,7 @@ def test_subzone_boundaries_cache_guard_rejects_null_geometries(tmp_path):
                 return _MOCK_MP2019_GEOJSON
 
             mock.get(_MP2019_POLL_URL, json=_MOCK_MP2019_POLL)
+            mock.head(_PRESIGNED_URL, headers={"Content-Length": "1024"})
             mock.get(_PRESIGNED_URL, json=request_callback)
 
             from sg_transit_weather_mesh.assets.ingestion import sg_gov_source
@@ -369,6 +371,35 @@ def test_subzone_boundaries_cache_guard_rejects_null_geometries(tmp_path):
             except Exception:
                 pass  # asset may error after fake download — we only care about download_called
             assert download_called, "Asset must attempt re-download when geometries are NULL"
+
+
+def test_ingest_asset_has_retry_policy():
+    """Asset must declare a RetryPolicy with max_retries >= 3."""
+    from dagster import RetryPolicy
+    from sg_transit_weather_mesh.assets.ingestion import ingest_sg_raw_data
+    op_def = ingest_sg_raw_data.op
+    assert op_def.retry_policy is not None, "ingest_sg_raw_data must have a retry_policy"
+    assert op_def.retry_policy.max_retries >= 3
+
+
+def test_subzone_skips_oversized_download(requests_mock, tmp_path):
+    """sg_subzone_boundaries must skip download when Content-Length > 100 MB."""
+    from unittest.mock import patch
+
+    requests_mock.get(
+        _MP2019_POLL_URL,
+        json={"data": {"url": "https://s3.example.com/mp2019.geojson"}},
+    )
+    requests_mock.head(
+        "https://s3.example.com/mp2019.geojson",
+        headers={"Content-Length": str(200 * 1024 * 1024)},  # 200 MB
+    )
+    db_path = str(tmp_path / "test.duckdb")
+    with patch("sg_transit_weather_mesh.assets.ingestion._DB_PATH", db_path):
+        from sg_transit_weather_mesh.assets.ingestion import sg_gov_source
+        source = sg_gov_source()
+        rows = list(source.resources["sg_subzone_boundaries"])
+        assert rows == [], "must yield nothing when download is oversized"
 
 
 def test_pipeline_continues_after_one_resource_fails(requests_mock, tmp_path):

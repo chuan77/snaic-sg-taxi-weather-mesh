@@ -6,7 +6,7 @@ import requests
 import time as _time
 from datetime import datetime
 from pathlib import Path
-from dagster import asset, Output
+from dagster import asset, Output, RetryPolicy
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from ..utils import load_config
 
@@ -215,6 +215,14 @@ def sg_gov_source():
             try:
                 poll = _fetch_json(_MP2019_POLL_URL, timeout=30)
                 download_url = poll["data"]["url"]
+                _MAX_GEOJSON_BYTES = 100 * 1024 * 1024  # 100 MB
+                head = requests.head(download_url, timeout=10)
+                content_length = int(head.headers.get("Content-Length", "0"))
+                if content_length > _MAX_GEOJSON_BYTES:
+                    _log.warning(
+                        f"sg_subzone_boundaries: skipping download, Content-Length {content_length} > {_MAX_GEOJSON_BYTES}"
+                    )
+                    return
                 fc = _fetch_json(download_url, timeout=120)
             except requests.exceptions.HTTPError:
                 return  # rate-limited or API error — skip silently, retry next run
@@ -240,7 +248,7 @@ def sg_gov_source():
     return taxi_availability, weather_forecast, weather_forecast_24hr, sg_subzone_boundaries
 
 
-@asset(compute_kind="dlt")
+@asset(compute_kind="dlt", retry_policy=RetryPolicy(max_retries=3, delay=30))
 def ingest_sg_raw_data():
     """Ingests taxi availability (v1) and 2-hr weather forecast (v2) into DuckDB raw schema."""
     pipeline = dlt.pipeline(
