@@ -52,7 +52,7 @@ export default function TaxiClusterPage() {
     layer.bindTooltip(
       `<strong>${feature.properties.SUBZONE_N}</strong><br/>` +
       `${feature.properties.PLN_AREA_N}<br/>` +
-      `<span style="font-size:1.1em;font-weight:600">${count} taxi${count !== 1 ? 's' : ''}</span>`,
+      `<span style="font-size:1.1em;font-weight:600">${count} visit${count !== 1 ? 's' : ''} (1hr window)</span>`,
       { sticky: true, className: 'subzone-tooltip' }
     );
   }, [counts]);
@@ -123,7 +123,8 @@ export default function TaxiClusterPage() {
           background: 'rgba(15,17,23,0.9)', borderRadius: 8,
           padding: '8px 12px', color: '#eee', fontSize: 11, border: '1px solid #333',
         }}>
-          <div style={{ marginBottom: 4, fontWeight: 600 }}>Taxis / Subzone</div>
+          <div style={{ marginBottom: 2, fontWeight: 600 }}>Taxi Visits / Subzone</div>
+          <div style={{ marginBottom: 4, color: '#888', fontSize: 10 }}>Distinct positions recorded</div>
           {COLOR_STOPS.slice(1).map((c, i) => (
             <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
               <span style={{ width: 12, height: 12, background: c, display: 'inline-block', borderRadius: 2 }} />
@@ -133,7 +134,7 @@ export default function TaxiClusterPage() {
             </div>
           ))}
           <div style={{ marginTop: 6, color: '#888', borderTop: '1px solid #333', paddingTop: 4 }}>
-            {taxiData.total} positions / last 1hr
+            {taxiData.total} position visits / 1hr window
           </div>
         </div>
       </div>
@@ -144,7 +145,7 @@ export default function TaxiClusterPage() {
         borderTop: '1px solid #2a2d3a', padding: '8px 12px',
       }}>
         <div style={{ fontSize: 11, color: '#888', marginBottom: 4, fontWeight: 600 }}>
-          TOP SUBZONES BY TAXI COUNT
+          TOP SUBZONES BY TAXI VISITS (1HR WINDOW)
         </div>
         {[...counts.entries()]
           .sort((a, b) => b[1] - a[1])
