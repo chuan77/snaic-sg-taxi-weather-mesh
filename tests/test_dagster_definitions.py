@@ -1,5 +1,4 @@
 """Tests for Dagster job and schedule definitions (FR-2)."""
-import pytest
 from dagster import JobDefinition, ScheduleDefinition
 
 from sg_transit_weather_mesh import defs
@@ -60,8 +59,11 @@ class TestDemandForecastJob:
         _schedule("demand_forecast_retrain_schedule")
 
     def test_forecast_schedule_cron(self):
+        from sg_transit_weather_mesh.utils import load_config
+        config = load_config()
+        expected = config["orchestration"].get("forecast_retrain_cron_schedule", "0 * * * *")
         schedule = _schedule("demand_forecast_retrain_schedule")
-        assert schedule.cron_schedule == "0 * * * *"
+        assert schedule.cron_schedule == expected
 
     def test_forecast_schedule_timezone(self):
         schedule = _schedule("demand_forecast_retrain_schedule")

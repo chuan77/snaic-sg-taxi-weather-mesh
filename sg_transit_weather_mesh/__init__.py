@@ -44,6 +44,7 @@ demand_forecast_retrain_schedule = ScheduleDefinition(
     job=demand_forecast_job,
     cron_schedule=retrain_cron,
     execution_timezone="Asia/Singapore",
+    description="Hourly GBR retraining — requires sg_taxi_weather_sync_job to have populated warehouse.duckdb first.",
 )
 
 defs = Definitions(
