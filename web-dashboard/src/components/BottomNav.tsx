@@ -1,7 +1,7 @@
 const TABS = [
   { id: 'map',    icon: '🗺️', label: 'Map View'       },
   { id: 'demand', icon: '🔥', label: 'Demand Heatmap' },
-  { id: 'route',  icon: '🔀', label: 'Route Planner'  },
+  { id: 'cluster', icon: '🏘️', label: 'Taxi Cluster'   },
   { id: 'alerts', icon: '🔔', label: 'Alerts'          },
 ];
 
