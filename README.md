@@ -40,8 +40,8 @@ NEA Weather API ┘                                        │
                                           ▼                              ▼
                                    hotspots_export              surge_predictor_export
                                    taxis_export                 taxi_clusters_export
-                                   weather_nowcast_export        demand_forecast_export ─► MLflow
-                                   subzones_export
+                                   taxi_window_export           demand_forecast_export ─► MLflow
+                                   weather_nowcast_export       subzones_export
                                           │
                                           ▼
                               web-dashboard/public/data/*.json
@@ -96,6 +96,7 @@ Inverts the taxi density heatmap to highlight areas where supply is lowest relat
 - Fleet Coverage Score stat in the stats panel (demand-weighted SDI, red/amber/green)
 - Active taxis count and estimated wait time stats panel
 - LLM surge alert banner in the header
+- **Taxi Cluster tab**: choropleth map of all 332 URA subzones coloured by taxi visit density, count badges at subzone centroids, hover tooltips, top-20 subzone table — based on last 30-minute rolling window of distinct taxi positions
 
 ---
 
@@ -246,7 +247,8 @@ snaic-sg-taxi-weather-mesh/
 │   └── src/
 │       ├── App.tsx                    # Root state, all hook calls
 │       ├── hooks/                     # useNowcast, useHotspots, useTaxis, useSurge,
-│       │                              # useClusters, useForecast, useSubzones, useChatLLM
+│       │                              # useClusters, useForecast, useSubzones, useChatLLM,
+│       │                              # useWindowTaxis, useSubzoneCounts
 │       ├── components/
 │       │   ├── MapLayer.tsx           # Leaflet container, conditional overlay rendering
 │       │   ├── TaxiDotLayer.tsx       # Canvas taxi point cloud
@@ -255,8 +257,9 @@ snaic-sg-taxi-weather-mesh/
 │       │   ├── DemandHotspots.tsx     # SDI + surge + 30-min prediction + planning areas
 │       │   ├── StatsPanel.tsx         # Active taxis, wait time, Fleet Coverage Score
 │       │   ├── HeaderOverlay.tsx      # Alert bar (surge → nowcast priority)
+│       │   ├── TaxiClusterPage.tsx    # Subzone choropleth map (30-min window)
 │       │   └── Legend.tsx             # Switches: Precipitation / Demand Density / Supply Gap
-│       └── types/index.ts             # All shared TypeScript types
+│       └── types/index.ts             # All shared TypeScript types (incl. SubzoneFeature/Collection)
 ├── Dockerfile                         # Backend image (python:3.11-slim + curl + uv)
 ├── docker-compose.yml                 # Full stack: dagster, mlflow, api, frontend
 ├── CLAUDE.md                          # Developer guide (architecture, patterns, commands)
