@@ -18,6 +18,7 @@ import StatsPanel from './components/StatsPanel';
 import AlertsPanel from './components/AlertsPanel';
 import BottomNav from './components/BottomNav';
 import ChatPanel from './components/ChatPanel';
+import TaxiClusterPage from './components/TaxiClusterPage';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('map');
@@ -37,70 +38,78 @@ export default function App() {
   return (
     <div className="fixed inset-0 bg-[#0a0e14] overflow-hidden">
 
-      {/* ── Full-viewport map base ─────────────────────────────────────────── */}
-      <div className="absolute inset-0">
-        <MapLayer
-          areas={nowcast.areas}
-          taxis={taxisData.taxis}
-          clusters={clustersData.clusters}
-          mode={mapMode}
-          invertHeatmap={invertHeatmap}
-        />
-      </div>
-
-      {/* ── Top-left: header + dynamic alert ──────────────────────────────── */}
-      <HeaderOverlay alert={nowcast.alert} surge={surgeData} />
-
-      {/* ── Top-right: legend (switches content based on active tab) ──────── */}
-      <Legend mode={mapMode} invert={invertHeatmap} />
-
-      {/* ── Right: taxi status key ────────────────────────────────────────── */}
-      <StatusKey />
-
-      {/* ── Invert toggle — only visible in demand tab ────────────────────── */}
-      {activeTab === 'demand' && (
-        <div
-          className="absolute"
-          style={{ top: '12px', right: '52px', zIndex: 1100 }}
-        >
-          <button
-            onClick={() => setInvertHeatmap(v => !v)}
-            className="px-3 py-1.5 rounded text-xs font-semibold tracking-wide transition-colors"
-            style={{
-              background: invertHeatmap ? 'rgba(239,68,68,0.85)' : 'rgba(34,197,94,0.85)',
-              color: '#fff',
-              border: 'none',
-              backdropFilter: 'blur(6px)',
-            }}
-          >
-            {invertHeatmap ? 'Supply Gap' : 'Taxi Density'}
-          </button>
+      {activeTab === 'cluster' ? (
+        <div className="absolute inset-0" style={{ bottom: '48px' }}>
+          <TaxiClusterPage />
         </div>
-      )}
-
-      {/* ── Bottom floating panels / Alerts page ─────────────────────────── */}
-      {activeTab === 'alerts' ? (
-        <AlertsPanel surge={surgeData} nowcastAlert={nowcast.alert} />
       ) : (
-        <div
-          className="absolute left-3 right-3 flex gap-2.5"
-          style={{ bottom: '60px', zIndex: 1001 }}
-        >
-          <NowcastTimeline steps={nowcast.timeline} validPeriodText={nowcast.valid_period.text} />
-          <Forecast24hTimeline data={forecast24h} />
-          <DemandHotspots
-            hotspots={hotspotsData.hotspots}
-            totalTaxis={hotspotsData.total_taxis_online}
-            surgeZones={surgeData.zones}
-            forecastZones={forecastData.zones}
-            planningAreas={subzonesData.planning_areas}
-          />
-          <StatsPanel
-            totalTaxis={hotspotsData.total_taxis_online}
-            regions={nowcast.regions}
-            coverageScore={hotspotsData.fleet_coverage_score ?? null}
-          />
-        </div>
+        <>
+          {/* ── Full-viewport map base ─────────────────────────────────────────── */}
+          <div className="absolute inset-0">
+            <MapLayer
+              areas={nowcast.areas}
+              taxis={taxisData.taxis}
+              clusters={clustersData.clusters}
+              mode={mapMode}
+              invertHeatmap={invertHeatmap}
+            />
+          </div>
+
+          {/* ── Top-left: header + dynamic alert ──────────────────────────────── */}
+          <HeaderOverlay alert={nowcast.alert} surge={surgeData} />
+
+          {/* ── Top-right: legend (switches content based on active tab) ──────── */}
+          <Legend mode={mapMode} invert={invertHeatmap} />
+
+          {/* ── Right: taxi status key ────────────────────────────────────────── */}
+          <StatusKey />
+
+          {/* ── Invert toggle — only visible in demand tab ────────────────────── */}
+          {activeTab === 'demand' && (
+            <div
+              className="absolute"
+              style={{ top: '12px', right: '52px', zIndex: 1100 }}
+            >
+              <button
+                onClick={() => setInvertHeatmap(v => !v)}
+                className="px-3 py-1.5 rounded text-xs font-semibold tracking-wide transition-colors"
+                style={{
+                  background: invertHeatmap ? 'rgba(239,68,68,0.85)' : 'rgba(34,197,94,0.85)',
+                  color: '#fff',
+                  border: 'none',
+                  backdropFilter: 'blur(6px)',
+                }}
+              >
+                {invertHeatmap ? 'Supply Gap' : 'Taxi Density'}
+              </button>
+            </div>
+          )}
+
+          {/* ── Bottom floating panels / Alerts page ─────────────────────────── */}
+          {activeTab === 'alerts' ? (
+            <AlertsPanel surge={surgeData} nowcastAlert={nowcast.alert} />
+          ) : (
+            <div
+              className="absolute left-3 right-3 flex gap-2.5"
+              style={{ bottom: '60px', zIndex: 1001 }}
+            >
+              <NowcastTimeline steps={nowcast.timeline} validPeriodText={nowcast.valid_period.text} />
+              <Forecast24hTimeline data={forecast24h} />
+              <DemandHotspots
+                hotspots={hotspotsData.hotspots}
+                totalTaxis={hotspotsData.total_taxis_online}
+                surgeZones={surgeData.zones}
+                forecastZones={forecastData.zones}
+                planningAreas={subzonesData.planning_areas}
+              />
+              <StatsPanel
+                totalTaxis={hotspotsData.total_taxis_online}
+                regions={nowcast.regions}
+                coverageScore={hotspotsData.fleet_coverage_score ?? null}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {/* ── Chat assistant — always rendered, manages own open state ─────── */}
