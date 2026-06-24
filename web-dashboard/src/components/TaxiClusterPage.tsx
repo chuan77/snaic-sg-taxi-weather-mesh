@@ -83,8 +83,8 @@ export default function TaxiClusterPage() {
   const isLoading = taxiLoading || geoLoading;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0f1117' }}>
-      <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+    <div style={{ position: 'absolute', inset: 0, background: '#0f1117' }}>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: '160px' }}>
         <MapContainer
           center={SG_CENTER}
           zoom={11}
@@ -140,9 +140,8 @@ export default function TaxiClusterPage() {
 
       {/* Top-20 table */}
       <div style={{
-        height: 160, overflowY: 'auto', background: '#1a1d27',
+        position: 'absolute', left: 0, right: 0, bottom: 0, height: '160px', overflowY: 'auto', background: '#1a1d27',
         borderTop: '1px solid #2a2d3a', padding: '8px 12px',
-        flexShrink: 0,
       }}>
         <div style={{ fontSize: 11, color: '#888', marginBottom: 4, fontWeight: 600 }}>
           TOP SUBZONES BY TAXI COUNT
