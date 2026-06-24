@@ -52,7 +52,7 @@ export default function TaxiClusterPage() {
     layer.bindTooltip(
       `<strong>${feature.properties.SUBZONE_N}</strong><br/>` +
       `${feature.properties.PLN_AREA_N}<br/>` +
-      `<span style="font-size:1.1em;font-weight:600">${count} visit${count !== 1 ? 's' : ''} (1hr window)</span>`,
+      `<span style="font-size:1.1em;font-weight:600">${count} visit${count !== 1 ? 's' : ''} (30min window)</span>`,
       { sticky: true, className: 'subzone-tooltip' }
     );
   }, [counts]);
@@ -128,7 +128,7 @@ export default function TaxiClusterPage() {
             <span style={{
               background: '#1e4d7b', color: '#7ec8ff', fontSize: 9, fontWeight: 700,
               borderRadius: 3, padding: '1px 5px', letterSpacing: 0.3,
-            }}>1 HR WINDOW</span>
+            }}>30 MIN WINDOW</span>
             <span style={{ color: '#666', fontSize: 10 }}>position visits</span>
           </div>
           {COLOR_STOPS.slice(1).map((c, i) => (
@@ -140,7 +140,7 @@ export default function TaxiClusterPage() {
             </div>
           ))}
           <div style={{ marginTop: 6, color: '#888', borderTop: '1px solid #333', paddingTop: 4 }}>
-            {taxiData.total} position visits / 1hr window
+            {taxiData.total} position visits / 30min window
           </div>
         </div>
       </div>

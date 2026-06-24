@@ -803,13 +803,13 @@ def taxis_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     group_name="exports",
 )
 def taxi_window_export(context: AssetExecutionContext, ingest_sg_raw_data, analytics_taxi_weather_mart) -> Output:
-    """Exports the last 1 hour of distinct taxi positions as taxis_window.json."""
+    """Exports the last 30 minutes of distinct taxi positions as taxis_window.json."""
     conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
     try:
         rows = conn.execute("""
             SELECT DISTINCT latitude AS lat, longitude AS lng
             FROM raw.taxi_availability
-            WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL 1 HOUR FROM raw.taxi_availability)
+            WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL 30 MINUTE FROM raw.taxi_availability)
               AND latitude  IS NOT NULL AND longitude IS NOT NULL
               AND latitude  BETWEEN 1.1 AND 1.5
               AND longitude BETWEEN 103.5 AND 104.1
@@ -818,10 +818,10 @@ def taxi_window_export(context: AssetExecutionContext, ingest_sg_raw_data, analy
         conn.close()
 
     taxis = [{"lat": round(float(r[0]), 4), "lng": round(float(r[1]), 4)} for r in rows]
-    out = {"window_hours": 1, "total": len(taxis), "taxis": taxis}
+    out = {"window_minutes": 30, "total": len(taxis), "taxis": taxis}
     _TAXIS_WINDOW_JSON.parent.mkdir(parents=True, exist_ok=True)
     _TAXIS_WINDOW_JSON.write_text(json.dumps(out, separators=(",", ":")))
-    context.log.info(f"Exported {len(taxis)} distinct positions (last 1hr) to {_TAXIS_WINDOW_JSON}")
+    context.log.info(f"Exported {len(taxis)} distinct positions (last 30min) to {_TAXIS_WINDOW_JSON}")
     return Output(value=None, metadata={"taxi_count": len(taxis), "taxis_window_path": str(_TAXIS_WINDOW_JSON)})
 
 
