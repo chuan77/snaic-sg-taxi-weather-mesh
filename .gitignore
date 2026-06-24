@@ -54,4 +54,4 @@ data/*.duckdb.wal
 
 # MLflow tracking store and artifact root
 data/mlflow.db
-data/mlruns/
+data/mlruns/web-dashboard/public/data/taxis_window.json

@@ -49,7 +49,7 @@ export function useSubzoneCounts(taxis: TaxiPoint[]) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/data/sg_subzones.geojson')
+    fetch('/sg_subzones.geojson')
       .then(r => r.json())
       .then((data: SubzoneCollection) => { setGeoJson(data); setLoading(false); })
       .catch(() => setLoading(false));
