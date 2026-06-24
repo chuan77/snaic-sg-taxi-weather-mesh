@@ -97,7 +97,7 @@ export default function TaxiClusterPage() {
           />
           {geoJson && (
             <GeoJSON
-              key={`${maxCount}-${taxiData.total}`}
+              key={`${maxCount}-${taxiData.taxis.length}`}
               data={geoJson as GeoJSON.FeatureCollection}
               style={styleFeature as (f?: GeoJSON.Feature) => object}
               onEachFeature={onEachFeature as (f: GeoJSON.Feature, l: Layer) => void}

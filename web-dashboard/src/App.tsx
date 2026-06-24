@@ -39,7 +39,7 @@ export default function App() {
     <div className="fixed inset-0 bg-[#0a0e14] overflow-hidden">
 
       {activeTab === 'cluster' ? (
-        <div className="absolute inset-0" style={{ bottom: '48px' }}>
+        <div className="absolute inset-0" style={{ bottom: '56px' }}>
           <TaxiClusterPage />
         </div>
       ) : (
