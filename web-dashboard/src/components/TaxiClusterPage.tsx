@@ -1,7 +1,7 @@
 import { useMemo, useCallback } from 'react';
 import { MapContainer, TileLayer, GeoJSON, Marker } from 'react-leaflet';
 import L, { type Layer } from 'leaflet';
-import { useTaxis } from '../hooks/useTaxis';
+import { useWindowTaxis } from '../hooks/useWindowTaxis';
 import { useSubzoneCounts } from '../hooks/useSubzoneCounts';
 import type { SubzoneFeature, SubzoneCollection } from '../types';
 
@@ -32,7 +32,7 @@ function featureCentroid(feature: SubzoneFeature): [number, number] {
 }
 
 export default function TaxiClusterPage() {
-  const { data: taxiData, loading: taxiLoading } = useTaxis();
+  const { data: taxiData, loading: taxiLoading } = useWindowTaxis();
   const { counts, maxCount, geoJson, loading: geoLoading } = useSubzoneCounts(taxiData.taxis);
 
   // Style each subzone polygon
@@ -97,7 +97,7 @@ export default function TaxiClusterPage() {
           />
           {geoJson && (
             <GeoJSON
-              key={`${maxCount}-${taxiData.taxis.length}`}
+              key={`${maxCount}-${taxiData.total}`}
               data={geoJson as GeoJSON.FeatureCollection}
               style={styleFeature as (f?: GeoJSON.Feature) => object}
               onEachFeature={onEachFeature as (f: GeoJSON.Feature, l: Layer) => void}
@@ -133,7 +133,7 @@ export default function TaxiClusterPage() {
             </div>
           ))}
           <div style={{ marginTop: 6, color: '#888', borderTop: '1px solid #333', paddingTop: 4 }}>
-            {taxiData.total} taxis total
+            {taxiData.total} positions / last 1hr
           </div>
         </div>
       </div>
