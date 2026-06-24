@@ -124,7 +124,13 @@ export default function TaxiClusterPage() {
           padding: '8px 12px', color: '#eee', fontSize: 11, border: '1px solid #333',
         }}>
           <div style={{ marginBottom: 2, fontWeight: 600 }}>Taxi Visits / Subzone</div>
-          <div style={{ marginBottom: 4, color: '#888', fontSize: 10 }}>Distinct positions recorded</div>
+          <div style={{ marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{
+              background: '#1e4d7b', color: '#7ec8ff', fontSize: 9, fontWeight: 700,
+              borderRadius: 3, padding: '1px 5px', letterSpacing: 0.3,
+            }}>1 HR WINDOW</span>
+            <span style={{ color: '#666', fontSize: 10 }}>position visits</span>
+          </div>
           {COLOR_STOPS.slice(1).map((c, i) => (
             <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
               <span style={{ width: 12, height: 12, background: c, display: 'inline-block', borderRadius: 2 }} />
