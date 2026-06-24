@@ -14,7 +14,7 @@ from pathlib import Path
 import mlflow
 import mlflow.sklearn
 from mlflow.entities import SpanType
-from dagster import asset, Output, AssetIn, get_dagster_logger
+from dagster import asset, Output, AssetIn, AssetExecutionContext, get_dagster_logger
 from ..utils import ask_llm, get_mlflow_config, configure_mlflow_tracking
 
 _PROJECT_ROOT   = Path(__file__).parent.parent.parent
@@ -27,6 +27,7 @@ _FORECAST24H_JSON   = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "for
 _FORECAST_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast.json"
 _CHAT_CONTEXT_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "chat_context.json"
 _SUBZONES_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "subzones.json"
+_TAXIS_WINDOW_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis_window.json"
 
 # NEA official forecast string → WeatherIntensity level used by the frontend
 FORECAST_INTENSITY: dict[str, str] = {
@@ -791,6 +792,37 @@ def taxis_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     _TAXIS_JSON.write_text(json.dumps(payload, separators=(",", ":")))
 
     return Output(value=None, metadata={"taxi_count": len(taxis), "taxis_path": str(_TAXIS_JSON)})
+
+
+@asset(
+    ins={
+        "ingest_sg_raw_data":          AssetIn(),
+        "analytics_taxi_weather_mart": AssetIn(),
+    },
+    compute_kind="duckdb",
+    group_name="exports",
+)
+def taxi_window_export(context: AssetExecutionContext, ingest_sg_raw_data, analytics_taxi_weather_mart) -> Output:
+    """Exports the last 1 hour of distinct taxi positions as taxis_window.json."""
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        rows = conn.execute("""
+            SELECT DISTINCT latitude AS lat, longitude AS lng
+            FROM raw.taxi_availability
+            WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL 1 HOUR FROM raw.taxi_availability)
+              AND latitude  IS NOT NULL AND longitude IS NOT NULL
+              AND latitude  BETWEEN 1.1 AND 1.5
+              AND longitude BETWEEN 103.5 AND 104.1
+        """).fetchall()
+    finally:
+        conn.close()
+
+    taxis = [{"lat": round(float(r[0]), 4), "lng": round(float(r[1]), 4)} for r in rows]
+    out = {"window_hours": 1, "total": len(taxis), "taxis": taxis}
+    _TAXIS_WINDOW_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _TAXIS_WINDOW_JSON.write_text(json.dumps(out, separators=(",", ":")))
+    context.log.info(f"Exported {len(taxis)} distinct positions (last 1hr) to {_TAXIS_WINDOW_JSON}")
+    return Output(value=None, metadata={"taxi_count": len(taxis), "taxis_window_path": str(_TAXIS_WINDOW_JSON)})
 
 
 @asset(
