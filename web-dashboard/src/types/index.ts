@@ -180,3 +180,31 @@ export interface SubzonesData {
   unassigned: number;
   planning_areas: PlanningAreaEntry[];
 }
+
+// Subzone GeoJSON types
+export interface SubzoneProperties {
+  SUBZONE_NO: number;
+  SUBZONE_N: string;       // subzone name, e.g. "JURONG EAST"
+  SUBZONE_C: string;       // subzone code, e.g. "JURE"
+  CA_IND: string;
+  PLN_AREA_N: string;      // planning area, e.g. "JURONG EAST"
+  PLN_AREA_C: string;
+  REGION_N: string;        // region, e.g. "WEST REGION"
+  REGION_C: string;
+  INC_CRC: string;
+  FMEL_UPD_D: string;
+}
+
+export interface SubzoneFeature {
+  type: 'Feature';
+  properties: SubzoneProperties;
+  geometry: {
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: number[][][] | number[][][][];
+  };
+}
+
+export interface SubzoneCollection {
+  type: 'FeatureCollection';
+  features: SubzoneFeature[];
+}
