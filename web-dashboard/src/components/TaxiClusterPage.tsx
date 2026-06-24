@@ -151,7 +151,7 @@ export default function TaxiClusterPage() {
         borderTop: '1px solid #2a2d3a', padding: '8px 12px',
       }}>
         <div style={{ fontSize: 11, color: '#888', marginBottom: 4, fontWeight: 600 }}>
-          TOP SUBZONES BY TAXI VISITS (1HR WINDOW)
+          TOP SUBZONES BY TAXI VISITS (30MIN WINDOW)
         </div>
         {[...counts.entries()]
           .sort((a, b) => b[1] - a[1])
