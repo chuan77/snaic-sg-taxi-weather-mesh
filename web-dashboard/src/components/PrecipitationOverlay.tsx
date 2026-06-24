@@ -20,8 +20,8 @@ interface Props {
 
 /**
  * Canvas overlay rendering a smooth radial-gradient "weather blob" centred on
- * each NEA area coordinate. Lives in Leaflet's overlayPane (z-index 400) so it
- * appears above tiles but below taxi markers (markerPane, z-index 600).
+ * each NEA area coordinate. Appended to map.getContainer() (z-index 400), same
+ * pattern as TaxiDotLayer/DemandHeatLayer, to avoid CSS transform desync during pan.
  */
 export function PrecipitationOverlay({ areas }: Props): null {
   const map      = useMap();
@@ -31,13 +31,14 @@ export function PrecipitationOverlay({ areas }: Props): null {
 
   // ── Inject canvas into Leaflet overlayPane on mount ───────────────────────
   useEffect(() => {
-    const pane = map.getPanes().overlayPane as HTMLElement;
+    const container = map.getContainer();
     const canvas = document.createElement('canvas');
     canvas.style.position      = 'absolute';
     canvas.style.top           = '0';
     canvas.style.left          = '0';
+    canvas.style.zIndex        = '400';
     canvas.style.pointerEvents = 'none';
-    pane.appendChild(canvas);
+    container.appendChild(canvas);
     canvasRef.current = canvas;
     return () => {
       canvas.remove();
