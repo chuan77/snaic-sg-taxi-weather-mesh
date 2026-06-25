@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useState } from 'react';
 import { MapContainer, TileLayer, GeoJSON, Marker } from 'react-leaflet';
 import L, { type Layer } from 'leaflet';
 import { useWindowTaxis } from '../hooks/useWindowTaxis';
@@ -32,7 +32,8 @@ function featureCentroid(feature: SubzoneFeature): [number, number] {
 }
 
 export default function TaxiClusterPage() {
-  const { data: taxiData, loading: taxiLoading } = useWindowTaxis();
+  const [windowMinutes, setWindowMinutes] = useState<15 | 30>(30);
+  const { data: taxiData, loading: taxiLoading } = useWindowTaxis(windowMinutes);
   const { counts, maxCount, geoJson, loading: geoLoading } = useSubzoneCounts(taxiData.taxis);
 
   // Style each subzone polygon
@@ -52,10 +53,10 @@ export default function TaxiClusterPage() {
     layer.bindTooltip(
       `<strong>${feature.properties.SUBZONE_N}</strong><br/>` +
       `${feature.properties.PLN_AREA_N}<br/>` +
-      `<span style="font-size:1.1em;font-weight:600">${count} visit${count !== 1 ? 's' : ''} (30min window)</span>`,
+      `<span style="font-size:1.1em;font-weight:600">${count} visit${count !== 1 ? 's' : ''} (${windowMinutes}min window)</span>`,
       { sticky: true, className: 'subzone-tooltip' }
     );
-  }, [counts]);
+  }, [counts, windowMinutes]);
 
   // Count badge markers — only for subzones that have taxis
   const countMarkers = useMemo(() => {
@@ -84,7 +85,31 @@ export default function TaxiClusterPage() {
 
   return (
     <div style={{ position: 'absolute', inset: 0, background: '#0f1117' }}>
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: '160px' }}>
+      {/* Window selector */}
+      <div style={{ display: 'flex', gap: '6px', padding: '8px 12px', background: '#1a1a2e' }}>
+        {([15, 30] as const).map(w => (
+          <button
+            key={w}
+            onClick={() => setWindowMinutes(w)}
+            style={{
+              padding: '4px 12px',
+              borderRadius: '999px',
+              border: '1px solid #4a4a6a',
+              background: windowMinutes === w ? '#4f46e5' : 'transparent',
+              color: windowMinutes === w ? '#fff' : '#9ca3af',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: windowMinutes === w ? 600 : 400,
+            }}
+          >
+            {w} min
+          </button>
+        ))}
+        <span style={{ marginLeft: '8px', color: '#9ca3af', fontSize: '13px', alignSelf: 'center' }}>
+          Taxi activity — last {windowMinutes} min
+        </span>
+      </div>
+      <div style={{ position: 'absolute', top: '40px', left: 0, right: 0, bottom: '160px' }}>
         <MapContainer
           center={SG_CENTER}
           zoom={11}
@@ -128,7 +153,7 @@ export default function TaxiClusterPage() {
             <span style={{
               background: '#1e4d7b', color: '#7ec8ff', fontSize: 9, fontWeight: 700,
               borderRadius: 3, padding: '1px 5px', letterSpacing: 0.3,
-            }}>30 MIN WINDOW</span>
+            }}>{windowMinutes} MIN WINDOW</span>
             <span style={{ color: '#666', fontSize: 10 }}>position visits</span>
           </div>
           {COLOR_STOPS.slice(1).map((c, i) => (
@@ -140,7 +165,7 @@ export default function TaxiClusterPage() {
             </div>
           ))}
           <div style={{ marginTop: 6, color: '#888', borderTop: '1px solid #333', paddingTop: 4 }}>
-            {taxiData.total} position visits / 30min window
+            {taxiData.total} position visits / {windowMinutes}min window
           </div>
         </div>
       </div>
@@ -151,7 +176,7 @@ export default function TaxiClusterPage() {
         borderTop: '1px solid #2a2d3a', padding: '8px 12px',
       }}>
         <div style={{ fontSize: 11, color: '#888', marginBottom: 4, fontWeight: 600 }}>
-          TOP SUBZONES BY TAXI VISITS (30MIN WINDOW)
+          TOP SUBZONES BY TAXI VISITS ({windowMinutes}MIN WINDOW)
         </div>
         {[...counts.entries()]
           .sort((a, b) => b[1] - a[1])
