@@ -22,7 +22,7 @@ export function useWindowTaxis(windowMinutes: 15 | 30) {
         .then((d: WindowTaxisData) => {
           if (active) { setData(d); setLoading(false); }
         })
-        .catch(() => { if (active) setLoading(false); });
+        .catch(() => { if (active) { setData(EMPTY); setLoading(false); } });
 
     setLoading(true);
     load();
