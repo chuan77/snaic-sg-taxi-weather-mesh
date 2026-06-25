@@ -71,7 +71,7 @@ ${timeline || 'No nowcast data.'}
 24-HOUR FORECAST:
 ${forecast24h || 'No 24-hour forecast data.'}
 
-PLANNING AREAS (current taxi counts — all 55 areas):
+PLANNING AREAS (current taxi counts — top 30 by count):
 ${planningAreas || 'No planning area data.'}
 
 PLANNING AREA PREDICTIONS (now / +30min / +1h / +2h):
@@ -142,8 +142,8 @@ export function useChatLLM(patternData?: PatternData) {
 
     const ctx: Record<string, unknown> = {
       ...chatCtx,
-      planning_area_predictions: patternData?.predictions ?? [],
-      low_availability_hours: patternData?.low_availability_hours ?? {},
+      planning_area_predictions: patternData?.predictions ?? chatCtx.planning_area_predictions ?? [],
+      low_availability_hours: patternData?.low_availability_hours ?? chatCtx.low_availability_hours ?? {},
     };
 
     const systemPrompt = buildSystemPrompt(ctx);
