@@ -1,8 +1,72 @@
 # tests/test_analytics.py
+import json
 import pytest
 import duckdb
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from sg_transit_weather_mesh.assets.analytics import _champion_selection_result
+
+
+def _make_rows(n: int) -> list[tuple[float, float]]:
+    """Generate n distinct (lat, lng) pairs within Singapore bounds."""
+    base_lat, base_lng = 1.3000, 103.8000
+    return [(round(base_lat + i * 0.0001, 4), round(base_lng + i * 0.0001, 4)) for i in range(n)]
+
+
+def test_taxi_window_export_writes_both_files(tmp_path):
+    """taxi_window_export must write taxis_window_15.json and taxis_window_30.json."""
+    from dagster import build_asset_context
+    from sg_transit_weather_mesh.assets.analytics import taxi_window_export
+
+    rows_15 = _make_rows(40)
+    rows_30 = _make_rows(80)
+
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchall.side_effect = [rows_15, rows_30]
+
+    file_15 = tmp_path / "taxis_window_15.json"
+    file_30 = tmp_path / "taxis_window_30.json"
+
+    with build_asset_context() as ctx, \
+         patch("sg_transit_weather_mesh.assets.analytics.duckdb.connect", return_value=mock_conn), \
+         patch("sg_transit_weather_mesh.assets.analytics._TAXIS_WINDOW_15_JSON", file_15), \
+         patch("sg_transit_weather_mesh.assets.analytics._TAXIS_WINDOW_30_JSON", file_30):
+        taxi_window_export(ctx, None, None)
+
+    assert file_15.exists(), "taxis_window_15.json was not written"
+    assert file_30.exists(), "taxis_window_30.json was not written"
+
+
+def test_taxi_window_export_json_contract(tmp_path):
+    """Each output file must have window_minutes, total, and taxis fields."""
+    from dagster import build_asset_context
+    from sg_transit_weather_mesh.assets.analytics import taxi_window_export
+
+    rows_15 = _make_rows(3)
+    rows_30 = _make_rows(7)
+
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchall.side_effect = [rows_15, rows_30]
+
+    file_15 = tmp_path / "taxis_window_15.json"
+    file_30 = tmp_path / "taxis_window_30.json"
+
+    with build_asset_context() as ctx, \
+         patch("sg_transit_weather_mesh.assets.analytics.duckdb.connect", return_value=mock_conn), \
+         patch("sg_transit_weather_mesh.assets.analytics._TAXIS_WINDOW_15_JSON", file_15), \
+         patch("sg_transit_weather_mesh.assets.analytics._TAXIS_WINDOW_30_JSON", file_30):
+        taxi_window_export(ctx, None, None)
+
+    data_15 = json.loads(file_15.read_text())
+    data_30 = json.loads(file_30.read_text())
+
+    assert data_15["window_minutes"] == 15
+    assert data_15["total"] == 3
+    assert len(data_15["taxis"]) == 3
+    assert all("lat" in t and "lng" in t for t in data_15["taxis"])
+
+    assert data_30["window_minutes"] == 30
+    assert data_30["total"] == 7
+    assert len(data_30["taxis"]) == 7
 
 @pytest.fixture
 def in_memory_warehouse():

@@ -32,7 +32,8 @@ _FORECAST_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "for
 _CHAT_CONTEXT_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "chat_context.json"
 _PATTERN_JSON       = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "pattern.json"
 _SUBZONES_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "subzones.json"
-_TAXIS_WINDOW_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis_window.json"
+_TAXIS_WINDOW_15_JSON = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis_window_15.json"
+_TAXIS_WINDOW_30_JSON = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis_window_30.json"
 
 _CHAMPION_GAP_THRESHOLD = 20  # taxis; guardrail for train_val_mae_gap before champion promotion
 
@@ -847,10 +848,18 @@ def taxis_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
     group_name="exports",
 )
 def taxi_window_export(context: AssetExecutionContext, ingest_sg_raw_data, analytics_taxi_weather_mart) -> Output:
-    """Exports the last 30 minutes of distinct taxi positions as taxis_window.json."""
+    """Exports distinct taxi positions for 15-min and 30-min rolling windows."""
     conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
     try:
-        rows = conn.execute("""
+        rows_15 = conn.execute("""
+            SELECT DISTINCT latitude AS lat, longitude AS lng
+            FROM raw.taxi_availability
+            WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL 15 MINUTE FROM raw.taxi_availability)
+              AND latitude  IS NOT NULL AND longitude IS NOT NULL
+              AND latitude  BETWEEN 1.1 AND 1.5
+              AND longitude BETWEEN 103.5 AND 104.1
+        """).fetchall()
+        rows_30 = conn.execute("""
             SELECT DISTINCT latitude AS lat, longitude AS lng
             FROM raw.taxi_availability
             WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL 30 MINUTE FROM raw.taxi_availability)
@@ -861,12 +870,26 @@ def taxi_window_export(context: AssetExecutionContext, ingest_sg_raw_data, analy
     finally:
         conn.close()
 
-    taxis = [{"lat": round(float(r[0]), 4), "lng": round(float(r[1]), 4)} for r in rows]
-    out = {"window_minutes": 30, "total": len(taxis), "taxis": taxis}
-    _TAXIS_WINDOW_JSON.parent.mkdir(parents=True, exist_ok=True)
-    _TAXIS_WINDOW_JSON.write_text(json.dumps(out, separators=(",", ":")))
-    context.log.info(f"Exported {len(taxis)} distinct positions (last 30min) to {_TAXIS_WINDOW_JSON}")
-    return Output(value=None, metadata={"taxi_count": len(taxis), "taxis_window_path": str(_TAXIS_WINDOW_JSON)})
+    def _write(rows: list, window: int, path) -> int:
+        taxis = [{"lat": round(float(r[0]), 4), "lng": round(float(r[1]), 4)} for r in rows]
+        out = {"window_minutes": window, "total": len(taxis), "taxis": taxis}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out, separators=(",", ":")))
+        return len(taxis)
+
+    count_15 = _write(rows_15, 15, _TAXIS_WINDOW_15_JSON)
+    count_30 = _write(rows_30, 30, _TAXIS_WINDOW_30_JSON)
+
+    context.log.info(f"Exported {count_15} positions (15 min) and {count_30} positions (30 min)")
+    return Output(
+        value=None,
+        metadata={
+            "taxi_count_15min": count_15,
+            "taxi_count_30min": count_30,
+            "taxis_window_15_path": str(_TAXIS_WINDOW_15_JSON),
+            "taxis_window_30_path": str(_TAXIS_WINDOW_30_JSON),
+        },
+    )
 
 
 @asset(
@@ -1203,13 +1226,9 @@ def _train_gbr_zone(
 
 
 @asset(
-    ins={
-        "ingest_sg_raw_data":          AssetIn(),
-        "analytics_taxi_weather_mart": AssetIn(),
-    },
     compute_kind="python",
 )
-def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
+def demand_forecast_export():
     """Trains a GradientBoostingRegressor per hotspot zone on rolling snapshot history,
     predicts taxi count 30 minutes ahead, writes forecast.json."""
 
@@ -1372,10 +1391,9 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
 
 
 @asset(
-    ins={"analytics_taxi_weather_mart": AssetIn()},
     compute_kind="python",
 )
-def availability_pattern_export(analytics_taxi_weather_mart):
+def availability_pattern_export():
     """Trains a Ridge regression model on historical taxi availability per planning area,
     predicts availability at now/+30min/+60min/+120min, and writes pattern.json."""
     _log = get_dagster_logger()
@@ -1556,12 +1574,12 @@ def availability_pattern_export(analytics_taxi_weather_mart):
                 _version = model_info.registered_model_version
                 if _version is not None:
                     _, _tags = _champion_selection_result(
-                        _client, _model_name, _version, val_mae, train_val_mae_gap
+                        _client, _model_name, str(_version), val_mae, train_val_mae_gap
                     )
                     for _tag_key, _tag_val in _tags.items():
                         mlflow.set_tag(_tag_key, _tag_val)
         except Exception as exc:
-            _log.warning(f"MLflow logging for availability_pattern_export failed: {exc}")
+            _log.warning(f"MLflow logging for availability_pattern_export failed: {exc}", exc_info=True)
 
     # Generate predictions per area for now / +30min / +60min / +120min
     now_dt = datetime.now()
@@ -1636,22 +1654,18 @@ def availability_pattern_export(analytics_taxi_weather_mart):
 
 @asset(
     ins={
-        "weather_nowcast_export":      AssetIn(),
-        "hotspots_export":             AssetIn(),
-        "demand_forecast_export":      AssetIn(),
-        "weather_24hr_export":         AssetIn(),
-        "subzones_export":             AssetIn(),
-        "availability_pattern_export": AssetIn(),
+        "weather_nowcast_export": AssetIn(),
+        "hotspots_export":        AssetIn(),
+        "weather_24hr_export":    AssetIn(),
+        "subzones_export":        AssetIn(),
     },
     compute_kind="python",
 )
 def chat_context_export(
     weather_nowcast_export,
     hotspots_export,
-    demand_forecast_export,
     weather_24hr_export,
     subzones_export,
-    availability_pattern_export,
 ):
     """Merges nowcast, hotspot, 30-min forecast, and 24-hr data into a single LLM context file."""
 
