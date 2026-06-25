@@ -7,8 +7,12 @@ import numpy as np
 from shapely.geometry import shape, Point
 from shapely.strtree import STRtree
 from sklearn.cluster import DBSCAN
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, mean_absolute_error, mean_squared_error, r2_score
 from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.linear_model import Ridge
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
 from datetime import datetime, timedelta
 from pathlib import Path
 import mlflow
@@ -26,6 +30,7 @@ _CLUSTERS_JSON    = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "clust
 _FORECAST24H_JSON   = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast24h.json"
 _FORECAST_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "forecast.json"
 _CHAT_CONTEXT_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "chat_context.json"
+_PATTERN_JSON       = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "pattern.json"
 _SUBZONES_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "subzones.json"
 _TAXIS_WINDOW_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis_window.json"
 
@@ -1328,11 +1333,269 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
 
 
 @asset(
+    ins={"analytics_taxi_weather_mart": AssetIn()},
+    compute_kind="python",
+)
+def availability_pattern_export(analytics_taxi_weather_mart):
+    """Trains a Ridge regression model on historical taxi availability per planning area,
+    predicts availability at now/+30min/+60min/+120min, and writes pattern.json."""
+    _log = get_dagster_logger()
+    generated_at = datetime.now().astimezone().isoformat()
+
+    conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+    try:
+        rows = conn.execute("""
+            SELECT t.event_hour, t.grid_lat, t.grid_lon, t.available_taxis_count
+            FROM mart.fct_taxi_weather_trends t
+            ORDER BY t.event_hour
+        """).fetchall()
+        try:
+            sz_rows = conn.execute("""
+                SELECT planning_area, geometry_json FROM raw.sg_subzone_boundaries
+            """).fetchall()
+        except Exception:
+            sz_rows = []
+    finally:
+        conn.close()
+
+    # Build STRtree for planning area assignment
+    area_shapes: list[tuple] = []  # (area_name, shape)
+    for pa_name, geom_json in sz_rows:
+        try:
+            geom = shape(_json.loads(geom_json))
+            area_shapes.append((pa_name.title(), geom))
+        except Exception:
+            continue
+
+    if area_shapes:
+        _pa_geoms = [g for _, g in area_shapes]
+        _pa_names = [n for n, _ in area_shapes]
+        _pa_tree = STRtree(_pa_geoms)
+    else:
+        _pa_tree = None
+        _pa_geoms = []
+        _pa_names = []
+
+    def _assign_planning_area(lat: float, lng: float) -> str:
+        if _pa_tree is None:
+            return "Unknown"
+        pt = Point(lng, lat)
+        for idx in _pa_tree.query(pt):
+            if _pa_geoms[idx].contains(pt):
+                return _pa_names[idx]
+        # nearest centroid fallback
+        min_d = float("inf")
+        nearest = "Unknown"
+        for i, g in enumerate(_pa_geoms):
+            d = pt.distance(g.centroid)
+            if d < min_d:
+                min_d = d
+                nearest = _pa_names[i]
+        return nearest
+
+    # Aggregate: assign planning area and group by (planning_area, event_hour)
+    from collections import defaultdict
+    pa_hour_counts: dict[tuple, int] = defaultdict(int)
+    for event_hour, grid_lat, grid_lon, cnt in rows:
+        if grid_lat is None or grid_lon is None:
+            continue
+        pa = _assign_planning_area(float(grid_lat), float(grid_lon))
+        pa_hour_counts[(pa, event_hour)] += int(cnt or 0)
+
+    # Collect distinct event_hours
+    all_hours = sorted({eh for (_, eh) in pa_hour_counts.keys()})
+
+    if len(all_hours) < 48:
+        _PATTERN_JSON.parent.mkdir(parents=True, exist_ok=True)
+        _PATTERN_JSON.write_text(json.dumps({"sufficient_data": False, "generated_at": generated_at}, indent=2))
+        return Output(value=None, metadata={"sufficient_data": False, "event_hours": len(all_hours)})
+
+    # Build feature rows
+    feature_rows = []
+    for (pa, event_hour), total_count in pa_hour_counts.items():
+        try:
+            dt = event_hour if isinstance(event_hour, datetime) else datetime.fromisoformat(str(event_hour))
+        except Exception:
+            continue
+        h = dt.hour
+        dow = dt.weekday()
+        hour_sin = math.sin(2 * math.pi * h / 24)
+        hour_cos = math.cos(2 * math.pi * h / 24)
+        dow_sin  = math.sin(2 * math.pi * dow / 7)
+        dow_cos  = math.cos(2 * math.pi * dow / 7)
+        is_weekend = 1 if dow >= 5 else 0
+        feature_rows.append({
+            "event_hour": dt,
+            "planning_area": pa,
+            "hour_sin": hour_sin,
+            "hour_cos": hour_cos,
+            "dow_sin":  dow_sin,
+            "dow_cos":  dow_cos,
+            "is_weekend": is_weekend,
+            "count": total_count,
+        })
+
+    # Temporal split 80/20
+    feature_rows.sort(key=lambda r: r["event_hour"])
+    split_idx = max(1, int(len(feature_rows) * 0.8))
+    train_rows = feature_rows[:split_idx]
+    val_rows   = feature_rows[split_idx:]
+
+    numeric_features = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend"]
+    categorical_features = ["planning_area"]
+
+    def _to_X_y(rows_list):
+        X_cat  = [[r["planning_area"]] for r in rows_list]
+        X_num  = [[r[f] for f in numeric_features] for r in rows_list]
+        y      = [r["count"] for r in rows_list]
+        return X_cat, X_num, y
+
+    X_cat_tr, X_num_tr, y_tr = _to_X_y(train_rows)
+    X_cat_va, X_num_va, y_va = _to_X_y(val_rows)
+
+    # Combine for ColumnTransformer
+    import numpy as np_local
+    X_train_raw = [row["planning_area"] for row in train_rows]
+    X_val_raw   = [row["planning_area"] for row in val_rows]
+
+    # Build full feature matrix: categorical + numeric
+    X_train_full = [[r["planning_area"]] + [r[f] for f in numeric_features] for r in train_rows]
+    X_val_full   = [[r["planning_area"]] + [r[f] for f in numeric_features] for r in val_rows]
+
+    preprocessor = ColumnTransformer(transformers=[
+        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), [0]),
+        ("num", "passthrough", list(range(1, 1 + len(numeric_features)))),
+    ])
+
+    pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("ridge", Ridge(alpha=1.0)),
+    ])
+
+    pipeline.fit(X_train_full, y_tr)
+    y_pred_tr = pipeline.predict(X_train_full)
+    y_pred_va = pipeline.predict(X_val_full)
+
+    train_mae = float(mean_absolute_error(y_tr, y_pred_tr))
+    val_mae   = float(mean_absolute_error(y_va, y_pred_va))
+    val_rmse  = float(mean_squared_error(y_va, y_pred_va) ** 0.5)
+    val_r2    = float(r2_score(y_va, y_pred_va)) if len(y_va) > 1 else 0.0
+    train_val_mae_gap = val_mae - train_mae
+
+    # Per-area val MAE
+    area_val_mae: dict[str, float] = {}
+    area_rows_map: dict[str, list] = defaultdict(list)
+    for i, r in enumerate(val_rows):
+        area_rows_map[r["planning_area"]].append(i)
+    for pa, idxs in area_rows_map.items():
+        y_true_pa = [y_va[i] for i in idxs]
+        y_pred_pa = [y_pred_va[i] for i in idxs]
+        area_val_mae[pa] = float(mean_absolute_error(y_true_pa, y_pred_pa))
+
+    # MLflow logging
+    _mlflow_cfg = get_mlflow_config()
+    if _mlflow_cfg is not None:
+        try:
+            configure_mlflow_tracking(_mlflow_cfg)
+            mlflow.set_experiment(_mlflow_cfg["experiments"]["availability_pattern"])
+            with mlflow.start_run(run_name=f"ridge_{datetime.now().strftime('%Y%m%dT%H%M')}"):
+                mlflow.log_params({"alpha": 1.0, "train_split": 0.8})
+                mlflow.log_metric("train_mae", train_mae)
+                mlflow.log_metric("val_mae", val_mae)
+                mlflow.log_metric("val_rmse", val_rmse)
+                mlflow.log_metric("val_r2", val_r2)
+                mlflow.log_metric("train_val_mae_gap", train_val_mae_gap)
+                for pa, mae_val in area_val_mae.items():
+                    key = "area_mae_" + pa.lower().replace(" ", "_")
+                    mlflow.log_metric(key, mae_val)
+                mlflow.sklearn.log_model(
+                    sk_model=pipeline,
+                    artifact_path="model",
+                    registered_model_name=_mlflow_cfg["registry"]["availability_pattern"],
+                )
+        except Exception as exc:
+            _log.warning(f"MLflow logging for availability_pattern_export failed: {exc}")
+
+    # Generate predictions per area for now / +30min / +60min / +120min
+    now_dt = datetime.now()
+    offsets = {"now": timedelta(0), "in_30min": timedelta(minutes=30),
+               "in_1h": timedelta(hours=1), "in_2h": timedelta(hours=2)}
+
+    all_areas = sorted({r["planning_area"] for r in feature_rows})
+    predictions = []
+    for pa in all_areas:
+        pred_row = {}
+        for label, delta in offsets.items():
+            target_dt = now_dt + delta
+            h = target_dt.hour
+            dow = target_dt.weekday()
+            feat = [
+                [pa,
+                 math.sin(2 * math.pi * h / 24),
+                 math.cos(2 * math.pi * h / 24),
+                 math.sin(2 * math.pi * dow / 7),
+                 math.cos(2 * math.pi * dow / 7),
+                 1 if dow >= 5 else 0]
+            ]
+            pred_val = max(0, int(round(float(pipeline.predict(feat)[0]))))
+            pred_row[label] = pred_val
+        predictions.append({"area": pa, **pred_row})
+
+    # Low-availability hours: 24 predictions per area, mark hours < 50% of daily peak
+    low_availability_hours: dict[str, list[int]] = {}
+    for pa in all_areas:
+        hourly_preds = []
+        for h in range(24):
+            dow = now_dt.weekday()
+            feat = [
+                [pa,
+                 math.sin(2 * math.pi * h / 24),
+                 math.cos(2 * math.pi * h / 24),
+                 math.sin(2 * math.pi * dow / 7),
+                 math.cos(2 * math.pi * dow / 7),
+                 1 if dow >= 5 else 0]
+            ]
+            hourly_preds.append(max(0, float(pipeline.predict(feat)[0])))
+        daily_peak = max(hourly_preds) if hourly_preds else 1.0
+        threshold = daily_peak * 0.5
+        low_hours = [h for h, p in enumerate(hourly_preds) if p < threshold]
+        if low_hours:
+            low_availability_hours[pa] = low_hours
+
+    payload = {
+        "generated_at": generated_at,
+        "sufficient_data": True,
+        "val_mae": round(val_mae, 4),
+        "val_r2": round(val_r2, 4),
+        "train_val_mae_gap": round(train_val_mae_gap, 4),
+        "predictions": predictions,
+        "low_availability_hours": low_availability_hours,
+    }
+
+    _PATTERN_JSON.parent.mkdir(parents=True, exist_ok=True)
+    _PATTERN_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return Output(
+        value=None,
+        metadata={
+            "sufficient_data": True,
+            "event_hours": len(all_hours),
+            "planning_areas": len(all_areas),
+            "val_mae": round(val_mae, 4),
+            "val_r2": round(val_r2, 4),
+            "pattern_path": str(_PATTERN_JSON),
+        },
+    )
+
+
+@asset(
     ins={
-        "weather_nowcast_export": AssetIn(),
-        "hotspots_export":        AssetIn(),
-        "demand_forecast_export": AssetIn(),
-        "weather_24hr_export":    AssetIn(),
+        "weather_nowcast_export":      AssetIn(),
+        "hotspots_export":             AssetIn(),
+        "demand_forecast_export":      AssetIn(),
+        "weather_24hr_export":         AssetIn(),
+        "subzones_export":             AssetIn(),
+        "availability_pattern_export": AssetIn(),
     },
     compute_kind="python",
 )
@@ -1341,6 +1604,8 @@ def chat_context_export(
     hotspots_export,
     demand_forecast_export,
     weather_24hr_export,
+    subzones_export,
+    availability_pattern_export,
 ):
     """Merges nowcast, hotspot, 30-min forecast, and 24-hr data into a single LLM context file."""
 
@@ -1354,6 +1619,8 @@ def chat_context_export(
     hotspots = _read_json(_HOTSPOTS_JSON)
     forecast = _read_json(_FORECAST_JSON)
     f24      = _read_json(_FORECAST24H_JSON)
+    subzones = _read_json(_SUBZONES_JSON)
+    pattern  = _read_json(_PATTERN_JSON)
 
     forecast_map = {z["id"]: z for z in forecast.get("zones", [])}
 
@@ -1370,15 +1637,52 @@ def chat_context_export(
             "level":           h.get("level", "low"),
         })
 
+    # Top 30 planning areas by count
+    planning_areas_sorted = sorted(
+        subzones.get("planning_areas", []),
+        key=lambda x: x.get("count", 0),
+        reverse=True,
+    )[:30]
+
+    # Rainfall readings
+    rainfall_active = False
+    rainfall_stations: list[dict] = []
+    try:
+        conn_rain = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
+        try:
+            rain_rows = conn_rain.execute("""
+                SELECT station_id, station_name, rainfall_mm
+                FROM raw.rainfall_readings
+                WHERE rainfall_mm > 0
+                ORDER BY rainfall_mm DESC
+            """).fetchall()
+            if rain_rows:
+                rainfall_active = True
+                rainfall_stations = [
+                    {"station_id": str(r[0]), "station_name": str(r[1]), "rainfall_mm": float(r[2])}
+                    for r in rain_rows
+                ]
+        except Exception:
+            pass
+        finally:
+            conn_rain.close()
+    except Exception:
+        pass
+
     payload = {
-        "generated_at":       datetime.now().astimezone().isoformat(),
-        "total_taxis":        hotspots.get("total_taxis_online", 0),
-        "valid_period_text":  nowcast.get("valid_period", {}).get("text", ""),
-        "sufficient_forecast": forecast.get("sufficient_data", False),
-        "areas":              nowcast.get("areas", []),
-        "hotspots":           merged_hotspots,
-        "nowcast_timeline":   nowcast.get("timeline", []),
-        "forecast_24h":       f24.get("periods", []),
+        "generated_at":               datetime.now().astimezone().isoformat(),
+        "total_taxis":                hotspots.get("total_taxis_online", 0),
+        "valid_period_text":          nowcast.get("valid_period", {}).get("text", ""),
+        "sufficient_forecast":        forecast.get("sufficient_data", False),
+        "areas":                      nowcast.get("areas", []),
+        "hotspots":                   merged_hotspots,
+        "nowcast_timeline":           nowcast.get("timeline", []),
+        "forecast_24h":               f24.get("periods", []),
+        "planning_areas":             planning_areas_sorted,
+        "rainfall_active":            rainfall_active,
+        "rainfall_stations":          rainfall_stations,
+        "planning_area_predictions":  pattern.get("predictions", []),
+        "low_availability_hours":     pattern.get("low_availability_hours", {}),
     }
 
     _CHAT_CONTEXT_JSON.parent.mkdir(parents=True, exist_ok=True)

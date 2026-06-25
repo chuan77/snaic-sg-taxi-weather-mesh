@@ -29,7 +29,7 @@ pipeline_execution_job = define_asset_job(
 # Hourly GBR retraining — runs against already-populated warehouse.duckdb
 demand_forecast_job = define_asset_job(
     name="demand_forecast_job",
-    selection=["demand_forecast_export"],
+    selection=["demand_forecast_export", "availability_pattern_export"],
 )
 
 realtime_api_poll_schedule = ScheduleDefinition(
