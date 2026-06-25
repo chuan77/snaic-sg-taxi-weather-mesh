@@ -1554,11 +1554,12 @@ def availability_pattern_export(analytics_taxi_weather_mart):
                 _client = mlflow.MlflowClient()
                 _model_name = _mlflow_cfg["registry"]["availability_pattern"]
                 _version = model_info.registered_model_version
-                _, _tags = _champion_selection_result(
-                    _client, _model_name, _version, val_mae, train_val_mae_gap
-                )
-                for _tag_key, _tag_val in _tags.items():
-                    mlflow.set_tag(_tag_key, _tag_val)
+                if _version is not None:
+                    _, _tags = _champion_selection_result(
+                        _client, _model_name, _version, val_mae, train_val_mae_gap
+                    )
+                    for _tag_key, _tag_val in _tags.items():
+                        mlflow.set_tag(_tag_key, _tag_val)
         except Exception as exc:
             _log.warning(f"MLflow logging for availability_pattern_export failed: {exc}")
 
