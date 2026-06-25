@@ -157,7 +157,7 @@ def test_make_forecast_run_name_with_none_falls_back():
 
 
 # Tests for _get_champion_val_mae helper
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def _make_mock_client(champion_run_id=None, val_mae=None):

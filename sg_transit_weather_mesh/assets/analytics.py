@@ -438,7 +438,7 @@ def _make_forecast_run_name(fetched_at) -> str:
     return f"gbr_{ts}"
 
 
-def _get_champion_val_mae(client, model_name: str):
+def _get_champion_val_mae(client, model_name: str) -> float | None:
     """Return the val_mae metric of the run aliased as 'champion' on model_name.
 
     Returns None if no champion alias exists or metric cannot be fetched.
