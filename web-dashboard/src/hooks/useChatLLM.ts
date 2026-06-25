@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../types';
+import type { PatternData, AreaPrediction } from './usePattern';
 
 // LLM requests use the Vite proxy (/llm/* → Docker Model Runner).
 // Proxy target is configured via LLM_PROXY_TARGET in vite.config.ts (server-side env var).
@@ -33,6 +34,27 @@ function buildSystemPrompt(ctx: Record<string, unknown>): string {
     ? '30-min predictions are from a trained model.'
     : '30-min predictions use current counts (insufficient history for model training).';
 
+  const planningAreas = (ctx.planning_areas as Array<{name: string; region: string; count: number}> ?? [])
+    .map(a => `- ${a.name} (${a.region}): ${a.count} taxis now`)
+    .join('\n');
+
+  const areaPredictions = (ctx.planning_area_predictions as AreaPrediction[] ?? [])
+    .map(a => `- ${a.area}: now=${a.now}, +30min=${a.in_30min}, +1h=${a.in_1h}, +2h=${a.in_2h}`)
+    .join('\n');
+
+  const rainfallActive = Boolean(ctx.rainfall_active);
+  const rainfallText = rainfallActive
+    ? (ctx.rainfall_stations as Array<{name: string; rainfall_mm: number}> ?? [])
+        .map(s => `- ${s.name}: ${s.rainfall_mm} mm`)
+        .join('\n') || 'Rain detected but no station details.'
+    : 'No active rainfall detected.';
+
+  const lowHours = ctx.low_availability_hours as Record<string, number[]> ?? {};
+  const lowHoursText = Object.entries(lowHours)
+    .filter(([, hours]) => hours.length > 0)
+    .map(([area, hours]) => `- ${area}: typically low at hours ${hours.join(', ')}`)
+    .join('\n');
+
   return `You are a Singapore taxi and weather assistant. Answer concisely using ONLY the data below.
 Current time: ${ctx.generated_at}. Total taxis online: ${ctx.total_taxis}.
 ${forecastNote}
@@ -49,12 +71,28 @@ ${timeline || 'No nowcast data.'}
 24-HOUR FORECAST:
 ${forecast24h || 'No 24-hour forecast data.'}
 
+PLANNING AREAS (current taxi counts — all 55 areas):
+${planningAreas || 'No planning area data.'}
+
+PLANNING AREA PREDICTIONS (now / +30min / +1h / +2h):
+${areaPredictions || 'No predictions available (insufficient history).'}
+
+RAINFALL (current):
+${rainfallText}
+
+HISTORICAL LOW-AVAILABILITY PATTERNS (hours of day, 0-23):
+${lowHoursText || 'No pattern data available yet.'}
+
 Rules:
 - Weather questions: match the place name to the nearest area in the WEATHER list.
 - "now" = current data. "in 30 min" = use predicted counts and nowcast trend.
 - "1 hour" or "2 hours" = use nowcast trend and 24-hour forecast for the relevant region.
 - "tonight" = use 24-hour forecast.
 - Taxi questions for areas not listed as a zone: use the nearest zone and same-region context.
+- Area questions ("taxis in Bedok", "Punggol now"): search PLANNING AREAS and PLANNING AREA PREDICTIONS first. Only fall back to TAXI DEMAND ZONES if the area is not found.
+- Time-horizon questions ("in 1 hour", "in 2 hours"): use in_1h / in_2h from PLANNING AREA PREDICTIONS.
+- Rain questions ("during rain", "when raining"): reference RAINFALL section; if rainfall_active, name which areas are wet.
+- Pattern questions ("usually", "typically", "at 8am"): use HISTORICAL LOW-AVAILABILITY PATTERNS.
 - Think briefly. Answer in 2-3 sentences max. State uncertainty clearly. No emojis.`;
 }
 
@@ -72,7 +110,7 @@ async function detectModel(): Promise<{ model: string | null; reason: OfflineRea
   }
 }
 
-export function useChatLLM() {
+export function useChatLLM(patternData?: PatternData) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [offlineReason, setOfflineReason] = useState<OfflineReason>(null);
@@ -96,11 +134,17 @@ export function useChatLLM() {
       return;
     }
 
-    let ctx: Record<string, unknown> = {};
+    let chatCtx: Record<string, unknown> = {};
     try {
       const ctxRes = await fetch(`/data/chat_context.json?t=${Date.now()}`);
-      if (ctxRes.ok) ctx = await ctxRes.json();
+      if (ctxRes.ok) chatCtx = await ctxRes.json();
     } catch { /* use empty context */ }
+
+    const ctx: Record<string, unknown> = {
+      ...chatCtx,
+      planning_area_predictions: patternData?.predictions ?? [],
+      low_availability_hours: patternData?.low_availability_hours ?? {},
+    };
 
     const systemPrompt = buildSystemPrompt(ctx);
 

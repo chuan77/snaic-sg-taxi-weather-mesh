@@ -7,6 +7,7 @@ import { useClusters } from './hooks/useClusters';
 import { useForecast24h } from './hooks/useForecast24h';
 import { useForecast } from './hooks/useForecast';
 import { useSubzones } from './hooks/useSubzones';
+import { usePattern } from './hooks/usePattern';
 import MapLayer from './components/MapLayer';
 import HeaderOverlay from './components/HeaderOverlay';
 import Legend from './components/Legend';
@@ -32,6 +33,7 @@ export default function App() {
   const { data: forecast24h } = useForecast24h();
   const { data: forecastData } = useForecast();
   const { data: subzonesData } = useSubzones();
+  const { data: patternData } = usePattern();
 
   const mapMode = activeTab === 'demand' ? 'heatmap' : 'map';
 
@@ -113,7 +115,7 @@ export default function App() {
       )}
 
       {/* ── Chat assistant — always rendered, manages own open state ─────── */}
-      <ChatPanel />
+      <ChatPanel patternData={patternData} />
 
       {/* ── Bottom nav bar ────────────────────────────────────────────────── */}
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />

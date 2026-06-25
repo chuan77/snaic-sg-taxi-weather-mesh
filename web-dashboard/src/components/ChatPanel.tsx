@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChatLLM } from '../hooks/useChatLLM';
+import type { PatternData } from '../hooks/usePattern';
 
 const SUGGESTIONS = [
   'Is there a taxi available in Punggol now?',
@@ -7,10 +8,14 @@ const SUGGESTIONS = [
   'Which zone has the highest demand in 30 minutes?',
 ];
 
-export default function ChatPanel() {
+interface ChatPanelProps {
+  patternData?: PatternData;
+}
+
+export default function ChatPanel({ patternData }: ChatPanelProps) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
-  const { messages, loading, offline, offlineReason, sendMessage, clearHistory } = useChatLLM();
+  const { messages, loading, offline, offlineReason, sendMessage, clearHistory } = useChatLLM(patternData);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
