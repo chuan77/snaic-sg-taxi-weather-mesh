@@ -15,20 +15,13 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..utils import get_mlflow_config
-from .model_store import model_store
-from .routes import health, models, predict, experiments
+from .routes import health, experiments
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    mlflow_cfg = get_mlflow_config()
-    if mlflow_cfg is not None:
-        model_store.load(mlflow_cfg)
-    else:
-        logger.info("MLflow disabled in config — model_store left empty")
     yield
 
 
@@ -57,8 +50,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
-    app.include_router(models.router, prefix="/models")
-    app.include_router(predict.router, prefix="/predict")
     app.include_router(experiments.router, prefix="/experiments")
 
     return app
