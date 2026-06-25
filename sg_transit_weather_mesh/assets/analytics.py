@@ -1450,13 +1450,8 @@ def availability_pattern_export(analytics_taxi_weather_mart):
         y      = [r["count"] for r in rows_list]
         return X_cat, X_num, y
 
-    X_cat_tr, X_num_tr, y_tr = _to_X_y(train_rows)
-    X_cat_va, X_num_va, y_va = _to_X_y(val_rows)
-
-    # Combine for ColumnTransformer
-    import numpy as np_local
-    X_train_raw = [row["planning_area"] for row in train_rows]
-    X_val_raw   = [row["planning_area"] for row in val_rows]
+    _, _, y_tr = _to_X_y(train_rows)
+    _, _, y_va = _to_X_y(val_rows)
 
     # Build full feature matrix: categorical + numeric
     X_train_full = [[r["planning_area"]] + [r[f] for f in numeric_features] for r in train_rows]
@@ -1492,6 +1487,8 @@ def availability_pattern_export(analytics_taxi_weather_mart):
         y_pred_pa = [y_pred_va[i] for i in idxs]
         area_val_mae[pa] = float(mean_absolute_error(y_true_pa, y_pred_pa))
 
+    all_areas = sorted({r["planning_area"] for r in feature_rows})
+
     # MLflow logging
     _mlflow_cfg = get_mlflow_config()
     if _mlflow_cfg is not None:
@@ -1505,6 +1502,8 @@ def availability_pattern_export(analytics_taxi_weather_mart):
                 mlflow.log_metric("val_rmse", val_rmse)
                 mlflow.log_metric("val_r2", val_r2)
                 mlflow.log_metric("train_val_mae_gap", train_val_mae_gap)
+                mlflow.log_metric("n_training_rows", len(train_rows))
+                mlflow.log_metric("n_planning_areas", len(all_areas))
                 for pa, mae_val in area_val_mae.items():
                     key = "area_mae_" + pa.lower().replace(" ", "_")
                     mlflow.log_metric(key, mae_val)
@@ -1521,7 +1520,6 @@ def availability_pattern_export(analytics_taxi_weather_mart):
     offsets = {"now": timedelta(0), "in_30min": timedelta(minutes=30),
                "in_1h": timedelta(hours=1), "in_2h": timedelta(hours=2)}
 
-    all_areas = sorted({r["planning_area"] for r in feature_rows})
     predictions = []
     for pa in all_areas:
         pred_row = {}
@@ -1651,7 +1649,7 @@ def chat_context_export(
         conn_rain = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
         try:
             rain_rows = conn_rain.execute("""
-                SELECT station_id, station_name, rainfall_mm
+                SELECT station_name, rainfall_mm, latitude, longitude
                 FROM raw.rainfall_readings
                 WHERE rainfall_mm > 0
                 ORDER BY rainfall_mm DESC
@@ -1659,7 +1657,7 @@ def chat_context_export(
             if rain_rows:
                 rainfall_active = True
                 rainfall_stations = [
-                    {"station_id": str(r[0]), "station_name": str(r[1]), "rainfall_mm": float(r[2])}
+                    {"name": str(r[0]), "rainfall_mm": round(float(r[1]), 1), "lat": r[2], "lng": r[3]}
                     for r in rain_rows
                 ]
         except Exception:
