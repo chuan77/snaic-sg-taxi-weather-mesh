@@ -1213,7 +1213,7 @@ def demand_forecast_export(ingest_sg_raw_data, analytics_taxi_weather_mart):
         _data_ts = None
         try:
             _data_ts = conn.execute(
-                "SELECT MAX(fetched_at) FROM mart.fct_taxi_weather_trends"
+                "SELECT MAX(event_hour) FROM mart.fct_taxi_weather_trends"
             ).fetchone()[0]
         except Exception:
             pass
