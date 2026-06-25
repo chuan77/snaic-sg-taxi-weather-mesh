@@ -72,9 +72,6 @@ class TestExperiments:
 
 
 def test_predict_demand_endpoint_removed():
-    from fastapi.testclient import TestClient
-    from unittest.mock import patch
-    from sg_transit_weather_mesh.api.main import create_app
     with patch("sg_transit_weather_mesh.utils.load_config", return_value={
         "api": {"key": "k", "base_url": "u"},
         "orchestration": {"poll_cron_schedule": "*/5 * * * *"},

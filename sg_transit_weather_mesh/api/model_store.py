@@ -13,7 +13,7 @@ class ModelStore:
     """Holds references to models loaded from the MLflow registry.
 
     Attributes are None when MLflow is unavailable or the registry is empty.
-    FastAPI routes check model_store.ready and return 503 on prediction endpoints.
+    FastAPI health route reads model_store.mlflow_available and model_store.ready.
     """
 
     def __init__(self) -> None:

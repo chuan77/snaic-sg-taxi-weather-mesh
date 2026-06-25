@@ -8,7 +8,6 @@ Swagger docs at: http://localhost:8000/docs
 """
 from __future__ import annotations
 import logging
-from contextlib import asynccontextmanager
 
 import os
 
@@ -20,21 +19,15 @@ from .routes import health, experiments
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-
-
 def create_app() -> FastAPI:
     app = FastAPI(
         title="SG Transit Weather Mesh — ML API",
         version="0.1.0",
         description=(
-            "On-demand inference and experiment history for the SG taxi demand pipeline. "
-            "Start the MLflow tracking server first (port 5000), then run the Dagster pipeline "
-            "to register a model before using the /predict endpoints."
+            "Experiment history for the SG taxi demand pipeline. "
+            "Start the MLflow tracking server first (port 5050), then run the Dagster pipeline "
+            "to register models."
         ),
-        lifespan=lifespan,
     )
 
     app.add_middleware(
