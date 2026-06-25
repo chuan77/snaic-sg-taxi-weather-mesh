@@ -49,6 +49,7 @@ _BASE_URL_V1 = config["api"]["base_url"]
 # v2 open API — no authentication required
 _WEATHER_V2_URL    = "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast"
 _WEATHER_24H_V2_URL = "https://api-open.data.gov.sg/v2/real-time/api/twenty-four-hr-forecast"
+_RAINFALL_V2_URL   = "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
 
 # URA Master Plan 2019 Subzone Boundaries (poll-download endpoint returns a presigned S3 URL)
 _MP2019_POLL_URL = (
@@ -246,7 +247,56 @@ def sg_gov_source():
             _log.warning(f"sg_subzone_boundaries: skipping due to error: {_exc}")
             return
 
-    return taxi_availability, weather_forecast, weather_forecast_24hr, sg_subzone_boundaries
+    @dlt.resource(name="rainfall_readings", write_disposition="replace",
+                  primary_key=["station_id", "timestamp"])
+    def nea_rainfall():
+        """Realtime rainfall readings from NEA weather stations via the data.gov.sg v2 open API.
+
+        Response shape (v2):
+          { data: {
+              readings: [{"stationId": "S06", "value": 0.0}, ...],
+              stations: [{"id": "S06", "name": "Pulau Ubin",
+                          "location": {"latitude": 1.4168, "longitude": 103.9673}}, ...]
+            }
+          }
+        """
+        try:
+            payload = _fetch_json(_RAINFALL_V2_URL, timeout=30)
+            data = payload.get("data", {})
+            readings = data.get("readings", [])
+            stations = data.get("stations", [])
+            if not readings or not stations:
+                _log.warning("nea_rainfall: missing 'data.readings' or 'data.stations' in response")
+                return
+
+            station_map = {
+                s["id"]: s for s in stations
+            }
+            timestamp = datetime.utcnow().isoformat()
+
+            for reading in readings:
+                station_id = reading.get("stationId")
+                station = station_map.get(station_id, {})
+                location = station.get("location", {})
+                lat = location.get("latitude")
+                lon = location.get("longitude")
+                if lat is None or lon is None:
+                    continue
+                if not (_SG_LAT[0] <= lat <= _SG_LAT[1] and _SG_LON[0] <= lon <= _SG_LON[1]):
+                    continue
+                yield {
+                    "station_id":   station_id,
+                    "station_name": station.get("name", ""),
+                    "latitude":     lat,
+                    "longitude":    lon,
+                    "rainfall_mm":  reading.get("value", 0.0),
+                    "timestamp":    timestamp,
+                }
+        except Exception as _exc:
+            _log.warning(f"nea_rainfall: skipping due to error: {_exc}")
+            return
+
+    return taxi_availability, weather_forecast, weather_forecast_24hr, sg_subzone_boundaries, nea_rainfall
 
 
 @asset(compute_kind="dlt", retry_policy=RetryPolicy(max_retries=3, delay=30))
