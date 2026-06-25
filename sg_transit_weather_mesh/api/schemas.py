@@ -9,14 +9,6 @@ class HealthResponse(BaseModel):
     tracking_uri: str | None
 
 
-class ModelVersionInfo(BaseModel):
-    name: str
-    version: str
-    stage: str
-    run_id: str | None
-    created_at: str | None
-
-
 class ExperimentRunItem(BaseModel):
     run_id: str
     start_time: str
