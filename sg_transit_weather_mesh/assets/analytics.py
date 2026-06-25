@@ -451,6 +451,30 @@ def _get_champion_val_mae(client, model_name: str) -> float | None:
         return None
 
 
+def _champion_selection_result(client, model_name: str, version: str, val_mae: float, gap: float):
+    """Evaluate whether the new model version should become champion.
+
+    Returns (promoted: bool, tags: dict[str, str]).
+    Side-effect: calls client.set_registered_model_alias when promoted=True.
+    """
+    tags = {}
+    if gap > _CHAMPION_GAP_THRESHOLD:
+        tags["champion_skipped"] = "guardrail_failed"
+        return False, tags
+
+    current_val_mae = _get_champion_val_mae(client, model_name)
+    if current_val_mae is not None:
+        tags["champion_val_mae"] = str(current_val_mae)
+
+    if current_val_mae is None or val_mae < current_val_mae:
+        client.set_registered_model_alias(model_name, "champion", version)
+        tags["champion_promoted"] = "true"
+        return True, tags
+
+    tags["champion_promoted"] = "false"
+    return False, tags
+
+
 def _classify_areas(rows: list, has_valid_period: bool) -> tuple:
     """Return (classified_areas, vp_start, vp_end, vp_text, update_ts)."""
     areas: list[dict] = []
@@ -1522,11 +1546,19 @@ def availability_pattern_export(analytics_taxi_weather_mart):
                 for pa, mae_val in area_val_mae.items():
                     key = "area_mae_" + pa.lower().replace(" ", "_")
                     mlflow.log_metric(key, mae_val)
-                mlflow.sklearn.log_model(
+                model_info = mlflow.sklearn.log_model(
                     sk_model=pipeline,
                     artifact_path="model",
                     registered_model_name=_mlflow_cfg["registry"]["availability_pattern"],
                 )
+                _client = mlflow.MlflowClient()
+                _model_name = _mlflow_cfg["registry"]["availability_pattern"]
+                _version = model_info.registered_model_version
+                _, _tags = _champion_selection_result(
+                    _client, _model_name, _version, val_mae, train_val_mae_gap
+                )
+                for _tag_key, _tag_val in _tags.items():
+                    mlflow.set_tag(_tag_key, _tag_val)
         except Exception as exc:
             _log.warning(f"MLflow logging for availability_pattern_export failed: {exc}")
 

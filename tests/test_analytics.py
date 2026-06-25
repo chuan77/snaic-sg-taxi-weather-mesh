@@ -1,6 +1,8 @@
 # tests/test_analytics.py
 import pytest
 import duckdb
+from unittest.mock import MagicMock
+from sg_transit_weather_mesh.assets.analytics import _champion_selection_result
 
 @pytest.fixture
 def in_memory_warehouse():
@@ -199,3 +201,45 @@ def test_get_champion_val_mae_empty_metric_history():
     client = _make_mock_client(champion_run_id="run-abc", val_mae=None)
     result = _get_champion_val_mae(client, "TaxiAvailabilityPattern")
     assert result is None
+
+
+def test_champion_guardrail_skips_promotion():
+    """gap > threshold → no alias set, tag champion_skipped=guardrail_failed."""
+    from sg_transit_weather_mesh.assets.analytics import _CHAMPION_GAP_THRESHOLD
+    client = MagicMock()
+    gap = _CHAMPION_GAP_THRESHOLD + 1
+    promote, tags = _champion_selection_result(client, "TaxiAvailabilityPattern", "3", 10.0, gap)
+    assert promote is False
+    assert tags.get("champion_skipped") == "guardrail_failed"
+    client.set_registered_model_alias.assert_not_called()
+
+
+def test_champion_first_run_promotes():
+    """No existing champion + gap ≤ threshold → alias assigned."""
+    from sg_transit_weather_mesh.assets.analytics import _CHAMPION_GAP_THRESHOLD
+    client = _make_mock_client(champion_run_id=None)
+    gap = _CHAMPION_GAP_THRESHOLD - 1
+    promote, tags = _champion_selection_result(client, "TaxiAvailabilityPattern", "3", 10.0, gap)
+    assert promote is True
+    assert tags.get("champion_promoted") == "true"
+    client.set_registered_model_alias.assert_called_once_with("TaxiAvailabilityPattern", "champion", "3")
+
+
+def test_champion_better_model_promotes():
+    """New val_mae < current champion val_mae + gap ≤ threshold → alias reassigned."""
+    client = _make_mock_client(champion_run_id="run-old", val_mae=15.0)
+    promote, tags = _champion_selection_result(client, "TaxiAvailabilityPattern", "4", 12.0, 5.0)
+    assert promote is True
+    assert tags.get("champion_promoted") == "true"
+    assert tags.get("champion_val_mae") == "15.0"
+    client.set_registered_model_alias.assert_called_once_with("TaxiAvailabilityPattern", "champion", "4")
+
+
+def test_champion_worse_model_no_promotion():
+    """New val_mae ≥ current champion val_mae → no alias change."""
+    client = _make_mock_client(champion_run_id="run-old", val_mae=10.0)
+    promote, tags = _champion_selection_result(client, "TaxiAvailabilityPattern", "4", 12.0, 5.0)
+    assert promote is False
+    assert tags.get("champion_promoted") == "false"
+    assert tags.get("champion_val_mae") == "10.0"
+    client.set_registered_model_alias.assert_not_called()
