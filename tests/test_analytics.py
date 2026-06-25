@@ -154,3 +154,48 @@ def test_make_forecast_run_name_with_none_falls_back():
     from sg_transit_weather_mesh.assets.analytics import _make_forecast_run_name
     name = _make_forecast_run_name(None)
     assert isinstance(name, str) and len(name) > 0
+
+
+# Tests for _get_champion_val_mae helper
+from unittest.mock import MagicMock, patch
+
+
+def _make_mock_client(champion_run_id=None, val_mae=None):
+    """Build a MlflowClient mock for _get_champion_val_mae tests."""
+    client = MagicMock()
+    if champion_run_id is None:
+        # No alias exists
+        from mlflow.exceptions import MlflowException
+        client.get_model_version_by_alias.side_effect = MlflowException("no alias")
+    else:
+        mv = MagicMock()
+        mv.run_id = champion_run_id
+        client.get_model_version_by_alias.return_value = mv
+        metric = MagicMock()
+        metric.value = val_mae
+        client.get_metric_history.return_value = [metric] if val_mae is not None else []
+    return client
+
+
+def test_get_champion_val_mae_no_alias():
+    """Returns None when no @champion alias exists."""
+    from sg_transit_weather_mesh.assets.analytics import _get_champion_val_mae
+    client = _make_mock_client(champion_run_id=None)
+    result = _get_champion_val_mae(client, "TaxiAvailabilityPattern")
+    assert result is None
+
+
+def test_get_champion_val_mae_with_alias():
+    """Returns val_mae float when @champion alias exists."""
+    from sg_transit_weather_mesh.assets.analytics import _get_champion_val_mae
+    client = _make_mock_client(champion_run_id="run-abc", val_mae=12.5)
+    result = _get_champion_val_mae(client, "TaxiAvailabilityPattern")
+    assert result == 12.5
+
+
+def test_get_champion_val_mae_empty_metric_history():
+    """Returns None when metric history is empty (metric not logged)."""
+    from sg_transit_weather_mesh.assets.analytics import _get_champion_val_mae
+    client = _make_mock_client(champion_run_id="run-abc", val_mae=None)
+    result = _get_champion_val_mae(client, "TaxiAvailabilityPattern")
+    assert result is None

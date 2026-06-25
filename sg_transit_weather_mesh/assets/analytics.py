@@ -34,6 +34,8 @@ _PATTERN_JSON       = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "pat
 _SUBZONES_JSON      = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "subzones.json"
 _TAXIS_WINDOW_JSON  = _PROJECT_ROOT / "web-dashboard" / "public" / "data" / "taxis_window.json"
 
+_CHAMPION_GAP_THRESHOLD = 20  # taxis; guardrail for train_val_mae_gap before champion promotion
+
 # NEA official forecast string → WeatherIntensity level used by the frontend
 FORECAST_INTENSITY: dict[str, str] = {
     "Fair":                                    "clear",
@@ -434,6 +436,19 @@ def _make_forecast_run_name(fetched_at) -> str:
         return "gbr_unknown"
     ts = str(fetched_at).replace(" ", "T").replace(":", "").replace("-", "")[:15]
     return f"gbr_{ts}"
+
+
+def _get_champion_val_mae(client, model_name: str):
+    """Return the val_mae metric of the run aliased as 'champion' on model_name.
+
+    Returns None if no champion alias exists or metric cannot be fetched.
+    """
+    try:
+        mv = client.get_model_version_by_alias(model_name, "champion")
+        history = client.get_metric_history(mv.run_id, "val_mae")
+        return history[0].value if history else None
+    except Exception:
+        return None
 
 
 def _classify_areas(rows: list, has_valid_period: bool) -> tuple:
