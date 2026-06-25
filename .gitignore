@@ -7,6 +7,7 @@ wheels/
 *.egg-info
 plan/
 mlruns/
+*.key
 
 # Virtual environments
 .venv

@@ -31,30 +31,34 @@ The platform ingests live LTA taxi positions (≈ 1,600–2,000 taxis) and NEA 2
 
 ```
 LTA Taxi API ──┐
-                ├─► Dagster (5-min cron) ─► dlt ─► DuckDB raw schema
-NEA Weather API ┘                                        │
-                                                         ▼
-                                              analytics_taxi_weather_mart
-                                                         │
-                                          ┌──────────────┴──────────────┐
-                                          ▼                              ▼
-                                   hotspots_export              surge_predictor_export
-                                   taxis_export                 taxi_clusters_export
-                                   taxi_window_export           demand_forecast_export ─► MLflow
-                                   weather_nowcast_export       subzones_export
-                                          │
-                                          ▼
-                              web-dashboard/public/data/*.json
-                                          │
-                              ┌───────────┴───────────────────────┐
-                              ▼                                    ▼
-                     React hooks (poll every 5 min)     FastAPI (port 8000)
-                              │                         ├─► POST /predict/demand
-                   ┌──────────┴──────────┐              ├─► GET  /models
-                   ▼                    ▼               └─► GET  /experiments/{name}/runs
-             Canvas overlays       UI panels
-          (TaxiDotLayer,       (DemandHotspots,
-           DemandHeatLayer)     StatsPanel, etc.)
+                ├─► Dagster (5-min cron)  ─► dlt ─► DuckDB raw schema
+NEA Weather API ┘   sg_taxi_weather_sync_job              │
+                                                          ▼
+                                               analytics_taxi_weather_mart
+                                                          │
+                                         ┌────────────────┴────────────────┐
+                                         ▼                                  ▼
+                                  hotspots_export               surge_predictor_export
+                                  taxis_export                  taxi_clusters_export
+                                  taxi_window_export            subzones_export
+                                  weather_nowcast_export
+                                         │
+                                         ▼
+                             web-dashboard/public/data/*.json
+                                         │
+                             ┌───────────┴───────────────────────┐
+                             ▼                                    ▼
+                    React hooks (poll every 5 min)     FastAPI (port 8000)
+                             │                         ├─► POST /predict/demand
+                  ┌──────────┴──────────┐              ├─► GET  /models
+                  ▼                    ▼               └─► GET  /experiments/{name}/runs
+            Canvas overlays       UI panels
+         (TaxiDotLayer,       (DemandHotspots,
+          DemandHeatLayer)     StatsPanel, etc.)
+
+Dagster (hourly cron) ─► demand_forecast_export ─► MLflow model registry
+demand_forecast_job       (reads warehouse.duckdb;   forecast.json
+                           requires prior sync run)
 ```
 
 ---
@@ -71,7 +75,7 @@ Reads NEA forecasts per hotspot zone, maps intensity to surge scores (0–100), 
 Runs `sklearn.cluster.DBSCAN` (haversine metric, `eps=0.0003` ≈ 1.9 km, `min_samples=10`) on the live taxi snapshot. Clusters are named via LLM or matched against known hotspot zones. Rendered as semi-transparent circles on the map.
 
 ### GBR Demand Forecasting
-Per-zone GradientBoostingRegressor trained on rolling taxi availability history. Features: last 6 taxi counts (LAG=6). Predicts taxi count 30 minutes ahead (HORIZON=6 × 5-min intervals). One model per hotspot zone is registered in MLflow after each Dagster run. Requires ≥ 13 samples per zone; degrades gracefully to no prediction otherwise. Exported to `forecast.json` and displayed as coloured prediction chips (cyan = growing, pink = dropping, amber = stable) on each hotspot row.
+Per-zone GradientBoostingRegressor trained on rolling taxi availability history. Features: last 6 taxi counts (LAG=6). Predicts taxi count 30 minutes ahead (HORIZON=6 × 5-min intervals). One model per hotspot zone is registered in MLflow on an **hourly schedule** (`demand_forecast_job`) — decoupled from the 5-minute sync to prevent registry bloat. Requires ≥ 13 samples per zone; degrades gracefully to no prediction otherwise. Exported to `forecast.json` and displayed as coloured prediction chips (cyan = growing, pink = dropping, amber = stable) on each hotspot row.
 
 ### Fleet Coverage Score
 Demand-weighted average SDI across all 6 hotspot zones, normalised to a 0–150% scale (capped at 1.5 per zone). Displayed in the Stats Panel as a real-time fleet health indicator with colour coding: red < 50%, amber 50–79%, green ≥ 80%.
@@ -149,7 +153,8 @@ api:
   key: "YOUR_DATA_GOV_SG_V2_KEY"
   base_url: "https://data.gov.sg"
 orchestration:
-  poll_cron_schedule: "*/5 * * * *"
+  poll_cron_schedule: "*/5 * * * *"          # realtime sync
+  forecast_retrain_cron_schedule: "0 * * * *" # GBR retraining (hourly)
 ```
 
 Get a free API key at [data.gov.sg](https://data.gov.sg).
@@ -207,7 +212,7 @@ Requires at least one Dagster pipeline run to register a model in MLflow. Swagge
 ```
 snaic-sg-taxi-weather-mesh/
 ├── config/
-│   └── config.yaml                    # API credentials, cron schedule, MLflow config
+│   └── config.yaml                    # API credentials, cron schedules, MLflow config
 ├── data/
 │   ├── warehouse.duckdb               # DuckDB database (gitignored)
 │   ├── mlflow.db                      # MLflow backend store (gitignored)
@@ -220,9 +225,10 @@ snaic-sg-taxi-weather-mesh/
 │   ├── test_api_health.py             # 8 API tests: health, predict/demand, experiments, models
 │   ├── test_analytics.py              # Analytics unit tests (SDI, surge, forecast helpers)
 │   ├── test_nowcast_export.py         # NEA nowcast logic: mapping, classification, alerts
-│   └── test_dashboard_data.py         # JSON export schema checks for all public/data/ files
+│   ├── test_dashboard_data.py         # JSON export schema checks for all public/data/ files
+│   └── test_dagster_definitions.py    # 10 tests: job selections and schedule cron/timezone
 ├── sg_transit_weather_mesh/
-│   ├── __init__.py                    # Dagster Definitions entry point
+│   ├── __init__.py                    # Dagster Definitions — two jobs, two schedules
 │   ├── utils.py                       # ask_llm(), get_mlflow_config(), configure_mlflow_tracking()
 │   ├── resources.py                   # Shared API client
 │   ├── api/

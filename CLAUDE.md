@@ -12,8 +12,11 @@ snaic-sg-taxi-weather-mesh is a real-time data platform that ingests live LTA ta
 # Backend pipeline — Dagster UI at http://localhost:3000
 uv run dagster dev
 
-# Run all assets once (no UI)
+# Run all assets once (no UI) — excludes demand_forecast_export
 uv run dagster job execute -j sg_taxi_weather_sync_job
+
+# Run GBR retraining manually (hourly schedule; requires a prior sync run)
+uv run dagster job execute -j demand_forecast_job
 
 # Frontend dashboard — Vite dev server at http://localhost:5173
 cd web-dashboard && npm run dev
@@ -76,7 +79,7 @@ NEA API ──┘         │                    │
 
 | File | Role |
 |---|---|
-| `__init__.py` | Dagster `Definitions` — registers all assets + job |
+| `__init__.py` | Dagster `Definitions` — registers all assets, two jobs, two schedules |
 | `assets/ingestion.py` | dlt pipelines: `ingest_sg_raw_data` (LTA + NEA → DuckDB raw schema) |
 | `assets/analytics.py` | All analytics assets: mart, hotspots, taxis, nowcast, surge, clusters, `taxi_window_export`, `demand_forecast_export` (GBR + MLflow), `subzones_export` |
 | `utils.py` | `ask_llm()`, `get_mlflow_config()`, `configure_mlflow_tracking()` |
@@ -130,7 +133,9 @@ In Docker Compose, the `dagster` and `frontend` services declare `models: [llm]`
 **Docker healthcheck:** `docker-compose.yml` adds a `healthcheck` to the `mlflow` service (`curl http://localhost:5050/health`) and makes `dagster` wait with `depends_on: condition: service_healthy`. This prevents the race condition where `demand_forecast_export` fires before MLflow is ready, silently dropping the `sg-taxi-demand-forecast` experiment. `Dockerfile` installs `curl` for the probe.
 
 ### GBR Demand Forecast
-`_train_gbr_zone(zone_id, zone_name, counts, sufficient_data)` in `assets/analytics.py`. Features: last LAG=6 taxi counts. Target: count at HORIZON=6 steps ahead (30 min). Params: `n_estimators=50, max_depth=3, random_state=42`, 80/20 train-test split. Returns `(model, train_data, mae)`. Requires ≥ LAG+HORIZON+1 = 13 samples; falls back to `sufficient_data=False` and skips registry registration for that zone. One model per zone is registered to MLflow under the `demand_forecast` experiment after each Dagster run.
+`_train_gbr_zone(zone_id, zone_name, counts, sufficient_data)` in `assets/analytics.py`. Features: last LAG=6 taxi counts. Target: count at HORIZON=6 steps ahead (30 min). Params: `n_estimators=50, max_depth=3, random_state=42`, 80/20 train-test split. Returns `(model, train_data, mae)`. Requires ≥ LAG+HORIZON+1 = 13 samples; falls back to `sufficient_data=False` and skips registry registration for that zone. One model per zone is registered to MLflow under the `demand_forecast` experiment.
+
+**Scheduling:** `demand_forecast_export` runs in the separate `demand_forecast_job` on the `demand_forecast_retrain_schedule` (default: `0 * * * *` — hourly). This job is decoupled from the 5-minute `sg_taxi_weather_sync_job` to prevent MLflow registry bloat. It reads from `warehouse.duckdb` directly and requires at least one prior sync run to have populated the mart. The cron is configurable via `forecast_retrain_cron_schedule` in `config/config.yaml`.
 
 ### Taxi Cluster Page
 `TaxiClusterPage.tsx` renders a choropleth of all 332 URA subzones coloured by taxi visit density. Key design decisions:
@@ -186,3 +191,5 @@ All files live in `web-dashboard/public/data/` and are gitignored — generated 
 `tests/test_nowcast_export.py` — NEA nowcast logic: area-region mapping, intensity classification, timeline derivation, alert generation
 
 `tests/test_dashboard_data.py` — JSON export schema validation for all seven `public/data/` files
+
+`tests/test_dagster_definitions.py` — 10 tests verifying Dagster job/schedule structure: `sg_taxi_weather_sync_job` excludes `demand_forecast_export`; `demand_forecast_job` includes it; both schedules have correct cron and `Asia/Singapore` timezone
