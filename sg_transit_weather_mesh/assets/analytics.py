@@ -1402,10 +1402,17 @@ def availability_pattern_export():
     conn = duckdb.connect(str(_PROJECT_ROOT / "data" / "warehouse.duckdb"), read_only=True)
     try:
         rows = conn.execute("""
-            SELECT t.event_hour, t.grid_lat, t.grid_lon, t.available_taxis_count
+            SELECT t.event_hour, t.grid_lat, t.grid_lon, t.available_taxis_count,
+                   t.prominent_weather_condition
             FROM mart.fct_taxi_weather_trends t
             ORDER BY t.event_hour
         """).fetchall()
+        weather_row = conn.execute("""
+            SELECT prominent_weather_condition
+            FROM mart.fct_taxi_weather_trends
+            WHERE event_hour = (SELECT MAX(event_hour) FROM mart.fct_taxi_weather_trends)
+            LIMIT 1
+        """).fetchone()
         try:
             sz_rows = conn.execute("""
                 SELECT planning_area, geometry_json FROM raw.sg_subzone_boundaries
@@ -1414,6 +1421,9 @@ def availability_pattern_export():
             sz_rows = []
     finally:
         conn.close()
+
+    _wc = (weather_row[0] or "") if weather_row else ""
+    current_weather_intensity = INTENSITY_RANK.get(FORECAST_INTENSITY.get(_wc, "clear"), 0)
 
     # Build STRtree for planning area assignment
     area_shapes: list[tuple] = []  # (area_name, shape)
@@ -1453,11 +1463,17 @@ def availability_pattern_export():
     # Aggregate: assign planning area and group by (planning_area, event_hour)
     from collections import defaultdict
     pa_hour_counts: dict[tuple, int] = defaultdict(int)
-    for event_hour, grid_lat, grid_lon, cnt in rows:
+    pa_hour_weather: dict[tuple, int] = {}  # (pa, event_hour) → max intensity
+    for event_hour, grid_lat, grid_lon, cnt, weather_cond in rows:
         if grid_lat is None or grid_lon is None:
             continue
         pa = _assign_planning_area(float(grid_lat), float(grid_lon))
-        pa_hour_counts[(pa, event_hour)] += int(cnt or 0)
+        key = (pa, event_hour)
+        pa_hour_counts[key] += int(cnt or 0)
+        wc_str = str(weather_cond or "")
+        new_rank = INTENSITY_RANK.get(FORECAST_INTENSITY.get(wc_str, "clear"), 0)
+        if new_rank >= pa_hour_weather.get(key, 0):
+            pa_hour_weather[key] = new_rank
 
     # Collect distinct event_hours
     all_hours = sorted({eh for (_, eh) in pa_hour_counts.keys()})
@@ -1482,6 +1498,7 @@ def availability_pattern_export():
         dow_cos  = math.cos(2 * math.pi * dow / 7)
         is_weekend = 1 if dow >= 5 else 0
         is_peak_hour = 1 if h in {7, 8, 17, 18, 19} else 0
+        weather_intensity = pa_hour_weather.get((pa, event_hour), 0)
         feature_rows.append({
             "event_hour": dt,
             "planning_area": pa,
@@ -1491,6 +1508,7 @@ def availability_pattern_export():
             "dow_cos":  dow_cos,
             "is_weekend": is_weekend,
             "is_peak_hour": is_peak_hour,
+            "weather_intensity": weather_intensity,
             "count": total_count,
         })
 
@@ -1500,7 +1518,7 @@ def availability_pattern_export():
     train_rows = feature_rows[:split_idx]
     val_rows   = feature_rows[split_idx:]
 
-    numeric_features = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend", "is_peak_hour"]
+    numeric_features = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend", "is_peak_hour", "weather_intensity"]
     categorical_features = ["planning_area"]
 
     def _to_X_y(rows_list):
@@ -1561,7 +1579,7 @@ def availability_pattern_export():
             configure_mlflow_tracking(_mlflow_cfg)
             mlflow.set_experiment(_mlflow_cfg["experiments"]["availability_pattern"])
             with mlflow.start_run(run_name=f"ridge_{datetime.now().strftime('%Y%m%dT%H%M')}"):
-                mlflow.log_params({"alpha": 1.0, "train_split": 0.8})
+                mlflow.log_params({"alpha": 1.0, "train_split": 0.8, "features": ",".join(numeric_features)})
                 mlflow.log_metric("train_mae", train_mae)
                 mlflow.log_metric("val_mae", val_mae)
                 mlflow.log_metric("val_rmse", val_rmse)
@@ -1608,7 +1626,8 @@ def availability_pattern_export():
                  math.sin(2 * math.pi * dow / 7),
                  math.cos(2 * math.pi * dow / 7),
                  1 if dow >= 5 else 0,
-                 1 if h in {7, 8, 17, 18, 19} else 0]
+                 1 if h in {7, 8, 17, 18, 19} else 0,
+                 current_weather_intensity]
             ]
             pred_val = max(0, int(round(math.expm1(float(pipeline.predict(feat)[0])))))
             pred_row[label] = pred_val
@@ -1627,7 +1646,8 @@ def availability_pattern_export():
                  math.sin(2 * math.pi * dow / 7),
                  math.cos(2 * math.pi * dow / 7),
                  1 if dow >= 5 else 0,
-                 1 if h in {7, 8, 17, 18, 19} else 0]
+                 1 if h in {7, 8, 17, 18, 19} else 0,
+                 current_weather_intensity]
             ]
             hourly_preds.append(max(0.0, math.expm1(float(pipeline.predict(feat)[0]))))
         daily_peak = max(hourly_preds) if hourly_preds else 1.0

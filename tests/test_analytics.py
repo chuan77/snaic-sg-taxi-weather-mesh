@@ -343,3 +343,24 @@ def test_log1p_zero_safe():
     import math
     assert math.log1p(0) == 0.0
     assert math.expm1(0.0) == 0.0
+
+
+def test_weather_intensity_clear_maps_to_zero():
+    """Fair weather and NULL both map to intensity 0."""
+    assert INTENSITY_RANK.get(FORECAST_INTENSITY.get("Fair", "clear"), 0) == 0
+    assert INTENSITY_RANK.get(FORECAST_INTENSITY.get("", "clear"), 0) == 0
+
+
+def test_weather_intensity_thundery_maps_to_four():
+    """Thundery Showers maps to intensity 4 (storm)."""
+    assert INTENSITY_RANK.get(FORECAST_INTENSITY.get("Thundery Showers", "clear"), 0) == 4
+
+
+def test_weather_intensity_moderate_rain_maps_to_two():
+    """Moderate Rain maps to intensity 2."""
+    assert INTENSITY_RANK.get(FORECAST_INTENSITY.get("Moderate Rain", "clear"), 0) == 2
+
+
+def test_weather_intensity_unknown_condition_defaults_to_zero():
+    """An unrecognised forecast string defaults to 0 via the 'clear' fallback."""
+    assert INTENSITY_RANK.get(FORECAST_INTENSITY.get("Alien Weather", "clear"), 0) == 0
