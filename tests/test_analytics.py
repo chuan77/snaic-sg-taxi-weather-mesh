@@ -329,3 +329,17 @@ def test_is_peak_hour_feature_row_values():
         assert (1 if h in peak_hours else 0) == 1, f"Hour {h} should be peak"
     for h in (0, 6, 9, 12, 16, 20, 23):
         assert (1 if h in peak_hours else 0) == 0, f"Hour {h} should be off-peak"
+
+
+def test_log1p_expm1_roundtrip():
+    """log1p then expm1 recovers the original count."""
+    import math
+    for count in (0, 1, 10, 100, 1000, 1294):
+        assert abs(math.expm1(math.log1p(count)) - count) < 1e-9
+
+
+def test_log1p_zero_safe():
+    """log1p(0) == 0, expm1(0) == 0 — no domain error."""
+    import math
+    assert math.log1p(0) == 0.0
+    assert math.expm1(0.0) == 0.0
