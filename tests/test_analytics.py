@@ -331,20 +331,6 @@ def test_is_peak_hour_feature_row_values():
         assert (1 if h in peak_hours else 0) == 0, f"Hour {h} should be off-peak"
 
 
-def test_log1p_expm1_roundtrip():
-    """log1p then expm1 recovers the original count."""
-    import math
-    for count in (0, 1, 10, 100, 1000, 1294):
-        assert abs(math.expm1(math.log1p(count)) - count) < 1e-9
-
-
-def test_log1p_zero_safe():
-    """log1p(0) == 0, expm1(0) == 0 — no domain error."""
-    import math
-    assert math.log1p(0) == 0.0
-    assert math.expm1(0.0) == 0.0
-
-
 def test_weather_intensity_clear_maps_to_zero():
     """Fair weather and NULL both map to intensity 0."""
     assert INTENSITY_RANK.get(FORECAST_INTENSITY.get("Fair", "clear"), 0) == 0

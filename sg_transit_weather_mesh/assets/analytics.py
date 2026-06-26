@@ -1524,7 +1524,7 @@ def availability_pattern_export():
     def _to_X_y(rows_list):
         X_cat  = [[r["planning_area"]] for r in rows_list]
         X_num  = [[r[f] for f in numeric_features] for r in rows_list]
-        y      = [math.log1p(r["count"]) for r in rows_list]
+        y      = [r["count"] for r in rows_list]
         return X_cat, X_num, y
 
     _, _, y_tr = _to_X_y(train_rows)
@@ -1545,19 +1545,13 @@ def availability_pattern_export():
     ])
 
     pipeline.fit(X_train_full, y_tr)
-    y_pred_tr_log = pipeline.predict(X_train_full)
-    y_pred_va_log = pipeline.predict(X_val_full)
+    y_pred_tr = pipeline.predict(X_train_full)
+    y_pred_va = pipeline.predict(X_val_full)
 
-    # Back-transform to original taxi-count space for interpretable metrics
-    y_tr_orig      = [math.expm1(v) for v in y_tr]
-    y_va_orig      = [math.expm1(v) for v in y_va]
-    y_pred_tr_orig = [max(0.0, math.expm1(v)) for v in y_pred_tr_log]
-    y_pred_va_orig = [max(0.0, math.expm1(v)) for v in y_pred_va_log]
-
-    train_mae         = float(mean_absolute_error(y_tr_orig, y_pred_tr_orig))
-    val_mae           = float(mean_absolute_error(y_va_orig, y_pred_va_orig))
-    val_rmse          = float(mean_squared_error(y_va_orig, y_pred_va_orig) ** 0.5)
-    val_r2            = float(r2_score(y_va_orig, y_pred_va_orig)) if len(y_va_orig) > 1 else 0.0
+    train_mae = float(mean_absolute_error(y_tr, y_pred_tr))
+    val_mae   = float(mean_absolute_error(y_va, y_pred_va))
+    val_rmse  = float(mean_squared_error(y_va, y_pred_va) ** 0.5)
+    val_r2    = float(r2_score(y_va, y_pred_va)) if len(y_va) > 1 else 0.0
     train_val_mae_gap = val_mae - train_mae
 
     # Per-area val MAE
@@ -1566,8 +1560,8 @@ def availability_pattern_export():
     for i, r in enumerate(val_rows):
         area_rows_map[r["planning_area"]].append(i)
     for pa, idxs in area_rows_map.items():
-        y_true_pa = [y_va_orig[i] for i in idxs]
-        y_pred_pa = [y_pred_va_orig[i] for i in idxs]
+        y_true_pa = [y_va[i] for i in idxs]
+        y_pred_pa = [y_pred_va[i] for i in idxs]
         area_val_mae[pa] = float(mean_absolute_error(y_true_pa, y_pred_pa))
 
     all_areas = sorted({r["planning_area"] for r in feature_rows})
@@ -1629,7 +1623,7 @@ def availability_pattern_export():
                  1 if h in {7, 8, 17, 18, 19} else 0,
                  current_weather_intensity]
             ]
-            pred_val = max(0, int(round(math.expm1(float(pipeline.predict(feat)[0])))))
+            pred_val = max(0, int(round(float(pipeline.predict(feat)[0]))))
             pred_row[label] = pred_val
         predictions.append({"area": pa, **pred_row})
 
@@ -1649,7 +1643,7 @@ def availability_pattern_export():
                  1 if h in {7, 8, 17, 18, 19} else 0,
                  current_weather_intensity]
             ]
-            hourly_preds.append(max(0.0, math.expm1(float(pipeline.predict(feat)[0]))))
+            hourly_preds.append(max(0, float(pipeline.predict(feat)[0])))
         daily_peak = max(hourly_preds) if hourly_preds else 1.0
         threshold = daily_peak * 0.5
         low_hours = [h for h, p in enumerate(hourly_preds) if p < threshold]
