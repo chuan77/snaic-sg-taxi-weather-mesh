@@ -65,8 +65,47 @@ demand_forecast_job       (reads warehouse.duckdb;   forecast.json
 
 ## AI/ML Features
 
-### Supply–Demand Index (SDI)
-Per-zone score comparing available taxis against expected demand. Expected demand is modelled from zone baseline demand × weather multiplier × rush-hour factor. Labels: Adequate / Tight / Shortage.
+### Demand Hotspots
+
+Six fixed zones cover Singapore's highest-demand areas. Each zone is a circle of fixed radius centred on a landmark coordinate:
+
+| ID | Zone | Radius |
+|---|---|---|
+| h1 | Marina Bay / CBD | 1.2 km |
+| h2 | Changi Airport | 1.8 km |
+| h3 | Orchard Road | 0.9 km |
+| h4 | Jurong East | 1.0 km |
+| h5 | Woodlands | 1.0 km |
+| h6 | Tampines | 1.0 km |
+
+Every 5-minute Dagster run counts the number of live LTA taxis whose coordinates fall within each zone's radius (flat-earth distance, error < 0.1% across Singapore's 50 km span).
+
+#### Demand Level — High / Medium / Low
+
+Zones are ranked by raw taxi count and split into positional thirds — so the label always reflects *relative* conditions across the 6 zones, not an absolute threshold. With 6 zones this yields exactly 2 High, 2 Medium, 2 Low per run. The split shifts whenever the distribution changes (e.g. Orchard spikes on a rainy Friday night).
+
+#### Supply–Demand Index (SDI)
+
+Per-zone score: `SDI = taxi_count / expected_demand`
+
+Expected demand is computed from three multipliers:
+
+```
+expected = base_demand × weather_multiplier × rush_hour_factor
+```
+
+| Factor | Values |
+|---|---|
+| **Base demand** (taxis) | h1: 80 · h2: 60 · h3: 70 · h4: 40 · h5: 30 · h6: 50 |
+| **Weather multiplier** | clear: 1.0 · drizzle: 1.3 · moderate: 1.7 · heavy: 2.2 · storm: 3.0 |
+| **Rush-hour factor** | 1.5 during hours 07, 08, 17, 18, 19 SGT; 1.0 otherwise |
+
+SDI labels:
+- **Adequate** — SDI ≥ 1.0 (supply meets or exceeds expected demand)
+- **Tight** — 0.5 ≤ SDI < 1.0 (supply below demand, some wait likely)
+- **Shortage** — SDI < 0.5 (significant undersupply)
+
+Example: Marina Bay / CBD at 08:00 during heavy rain → expected = 80 × 2.2 × 1.5 = 264 taxis. If 180 taxis are counted, SDI = 180 / 264 ≈ 0.68 → **Tight**.
 
 ### Weather-Triggered Surge Predictor
 Reads NEA forecasts per hotspot zone, maps intensity to surge scores (0–100), and generates a 1-sentence dispatch alert via Docker Model Runner. Degrades gracefully to template fallback when LLM is unavailable.

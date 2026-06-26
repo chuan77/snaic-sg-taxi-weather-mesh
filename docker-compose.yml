@@ -23,7 +23,9 @@ services:
     command: >
       uv run mlflow server
         --backend-store-uri sqlite:////app/data/mlflow.db
-        --default-artifact-root /app/data/mlruns
+        --artifacts-destination /app/data/mlruns
+        --default-artifact-root mlflow-artifacts:/
+        --serve-artifacts
         --host 0.0.0.0
         --port 5050
         --workers 1
