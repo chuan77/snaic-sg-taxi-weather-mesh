@@ -63,6 +63,64 @@ demand_forecast_job       (reads warehouse.duckdb;   forecast.json
 
 ---
 
+## Data Engineering Pipeline
+
+The pipeline is the backbone of the platform — it automatically collects raw data from two government APIs, cleans and transforms it, and makes it available to both the dashboard and the ML models, all without any manual intervention.
+
+### Step 1 — Ingestion (every 5 minutes)
+
+Two live data sources are polled on a 5-minute schedule by **Dagster**, an open-source workflow orchestrator:
+
+| Source | What it provides |
+|---|---|
+| **LTA DataMall** (Land Transport Authority) | Real-time GPS positions of every taxi in Singapore (~1,600+ vehicles) |
+| **NEA Weather API** (National Environment Agency) | 2-hour rain nowcast across 55 forecast areas |
+
+Raw responses are loaded into **DuckDB** (an embedded analytical database) under a `raw` schema using **dlt** (data load tool), which handles deduplication and schema versioning automatically.
+
+### Step 2 — Transformation (the analytics mart)
+
+Once raw data lands in DuckDB, a single **mart asset** (`analytics_taxi_weather_mart`) joins and enriches it:
+
+- Taxi positions are spatially assigned to hotspot zones and URA subzones
+- Weather readings are mapped to the same geographic zones as taxi data
+- Derived metrics (taxi counts per zone, time-window aggregates) are computed and written back to DuckDB
+
+This mart is the single source of truth for everything downstream — no other asset reads raw tables directly.
+
+### Step 3 — Export (JSON files)
+
+After the mart is written, a set of **export assets** run in parallel, each reading from DuckDB (read-only) and writing a small JSON file into `web-dashboard/public/data/`:
+
+```
+analytics_taxi_weather_mart
+        │
+        ├─► hotspots_export       → hotspots.json      (zone demand scores)
+        ├─► taxis_export          → taxis.json         (live taxi positions)
+        ├─► taxi_window_export    → taxis_window.json  (30-min rolling positions)
+        ├─► surge_predictor_export→ surge.json         (weather-triggered surge alerts)
+        ├─► taxi_clusters_export  → clusters.json      (DBSCAN cluster centroids)
+        ├─► weather_nowcast_export→ nowcast.json       (precipitation timeline)
+        └─► subzones_export       → subzones.json      (332 URA subzone counts)
+```
+
+JSON files are the handoff point between the backend pipeline and the frontend. The React dashboard polls these files every 5 minutes — no persistent API connection is required.
+
+### Step 4 — ML Retraining (hourly, separate job)
+
+Independently of the 5-minute sync, a second Dagster job (`demand_forecast_job`) runs **once per hour**. It reads the accumulating taxi count history from DuckDB and retrains a demand forecast model for each hotspot zone, then registers the updated models in **MLflow**. This job is deliberately decoupled from the main sync to avoid flooding the model registry with thousands of versions per day.
+
+### Why this design?
+
+| Decision | Reason |
+|---|---|
+| DuckDB as the warehouse | Zero-config, file-based, fast for analytical queries — no database server to run |
+| Static JSON exports | The dashboard works even when the pipeline is paused; no live DB connection needed |
+| Dagster for orchestration | Asset-based lineage means you can see exactly what depends on what and rerun failed steps |
+| Hourly ML retraining separate from 5-min sync | Prevents MLflow registry bloat; ML models don't need to update as often as raw data |
+
+---
+
 ## AI/ML Features
 
 ### Demand Hotspots
