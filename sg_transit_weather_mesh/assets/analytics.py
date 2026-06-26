@@ -1481,6 +1481,7 @@ def availability_pattern_export():
         dow_sin  = math.sin(2 * math.pi * dow / 7)
         dow_cos  = math.cos(2 * math.pi * dow / 7)
         is_weekend = 1 if dow >= 5 else 0
+        is_peak_hour = 1 if h in {7, 8, 17, 18, 19} else 0
         feature_rows.append({
             "event_hour": dt,
             "planning_area": pa,
@@ -1489,6 +1490,7 @@ def availability_pattern_export():
             "dow_sin":  dow_sin,
             "dow_cos":  dow_cos,
             "is_weekend": is_weekend,
+            "is_peak_hour": is_peak_hour,
             "count": total_count,
         })
 
@@ -1498,7 +1500,7 @@ def availability_pattern_export():
     train_rows = feature_rows[:split_idx]
     val_rows   = feature_rows[split_idx:]
 
-    numeric_features = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend"]
+    numeric_features = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend", "is_peak_hour"]
     categorical_features = ["planning_area"]
 
     def _to_X_y(rows_list):
@@ -1599,7 +1601,8 @@ def availability_pattern_export():
                  math.cos(2 * math.pi * h / 24),
                  math.sin(2 * math.pi * dow / 7),
                  math.cos(2 * math.pi * dow / 7),
-                 1 if dow >= 5 else 0]
+                 1 if dow >= 5 else 0,
+                 1 if h in {7, 8, 17, 18, 19} else 0]
             ]
             pred_val = max(0, int(round(float(pipeline.predict(feat)[0]))))
             pred_row[label] = pred_val
@@ -1617,7 +1620,8 @@ def availability_pattern_export():
                  math.cos(2 * math.pi * h / 24),
                  math.sin(2 * math.pi * dow / 7),
                  math.cos(2 * math.pi * dow / 7),
-                 1 if dow >= 5 else 0]
+                 1 if dow >= 5 else 0,
+                 1 if h in {7, 8, 17, 18, 19} else 0]
             ]
             hourly_preds.append(max(0, float(pipeline.predict(feat)[0])))
         daily_peak = max(hourly_preds) if hourly_preds else 1.0

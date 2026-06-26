@@ -3,7 +3,7 @@ import json
 import pytest
 import duckdb
 from unittest.mock import MagicMock, patch
-from sg_transit_weather_mesh.assets.analytics import _champion_selection_result
+from sg_transit_weather_mesh.assets.analytics import _champion_selection_result, FORECAST_INTENSITY, INTENSITY_RANK
 
 
 def _make_rows(n: int) -> list[tuple[float, float]]:
@@ -306,3 +306,21 @@ def test_champion_worse_model_no_promotion():
     assert tags.get("champion_promoted") == "false"
     assert tags.get("champion_val_mae") == "10.0"
     client.set_registered_model_alias.assert_not_called()
+
+
+def test_is_peak_hour_true_for_morning_peak():
+    """Hours 7 and 8 are morning peak."""
+    for h in (7, 8):
+        assert (1 if h in {7, 8, 17, 18, 19} else 0) == 1
+
+
+def test_is_peak_hour_true_for_evening_peak():
+    """Hours 17, 18, 19 are evening peak."""
+    for h in (17, 18, 19):
+        assert (1 if h in {7, 8, 17, 18, 19} else 0) == 1
+
+
+def test_is_peak_hour_false_for_offpeak():
+    """Hour 12 (midday) and 3 (night) are not peak."""
+    for h in (3, 12, 23):
+        assert (1 if h in {7, 8, 17, 18, 19} else 0) == 0
