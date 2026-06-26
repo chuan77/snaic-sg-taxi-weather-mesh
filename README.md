@@ -114,10 +114,29 @@ Reads NEA forecasts per hotspot zone, maps intensity to surge scores (0–100), 
 Runs `sklearn.cluster.DBSCAN` (haversine metric, `eps=0.0003` ≈ 1.9 km, `min_samples=10`) on the live taxi snapshot. Clusters are named via LLM or matched against known hotspot zones. Rendered as semi-transparent circles on the map.
 
 ### GBR Demand Forecasting
-Per-zone GradientBoostingRegressor trained on rolling taxi availability history. Features: last 6 taxi counts (LAG=6). Predicts taxi count 30 minutes ahead (HORIZON=6 × 5-min intervals). One model per hotspot zone is registered in MLflow on an **hourly schedule** (`demand_forecast_job`) — decoupled from the 5-minute sync to prevent registry bloat. Requires ≥ 13 samples per zone; degrades gracefully to no prediction otherwise. Exported to `forecast.json` and displayed as coloured prediction chips (cyan = growing, pink = dropping, amber = stable) on each hotspot row.
+Every hour, a small machine-learning model (Gradient Boosting Regressor) is trained for each of the 6 hotspot zones. The model looks at how many taxis were available in that zone over the last 30 minutes (six 5-minute snapshots) and uses that pattern to predict how many taxis will be there **30 minutes from now**.
+
+Think of it like a weather forecast, but for taxis: if taxi counts in Orchard have been steadily dropping for the last half hour, the model will predict a continued drop and warn you early.
+
+Each prediction appears as a small coloured chip next to the zone name:
+- **Cyan** — taxi availability is expected to grow
+- **Pink** — taxi availability is expected to drop
+- **Amber** — relatively stable, no big change expected
+
+The model needs at least 13 historical snapshots to make a reliable prediction; zones with too little history show no chip rather than a guess. Models are retrained hourly (not every 5 minutes) to keep the system lightweight.
 
 ### Fleet Coverage Score
-Demand-weighted average SDI across all 6 hotspot zones, normalised to a 0–150% scale (capped at 1.5 per zone). Displayed in the Stats Panel as a real-time fleet health indicator with colour coding: red < 50%, amber 50–79%, green ≥ 80%.
+A single number (0–100%) that answers the question: *"How well is the current taxi fleet serving the busiest areas right now?"*
+
+It is calculated by comparing taxi supply against demand at each of the 6 hotspot zones, then averaging across all zones — but zones with higher demand count more heavily in the average (demand-weighted). A zone with 10× more passengers needing taxis has 10× more influence on the score than a quiet zone.
+
+| Score | Colour | What it means |
+|---|---|---|
+| ≥ 80% | Green | Fleet is well-distributed across demand centres |
+| 50–79% | Amber | Some hotspots are underserved |
+| < 50% | Red | Fleet coverage is poor; major zones have a supply shortfall |
+
+The score is displayed in the Stats Panel and updates every 5 minutes alongside the live taxi data.
 
 ### Inverse Supply Heatmap (Supply Gap)
 Inverts the taxi density heatmap to highlight areas where supply is lowest relative to surrounding density — a proxy for unmet demand. Toggled per user via the dashboard.
