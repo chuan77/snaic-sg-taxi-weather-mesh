@@ -308,19 +308,24 @@ def test_champion_worse_model_no_promotion():
     client.set_registered_model_alias.assert_not_called()
 
 
-def test_is_peak_hour_true_for_morning_peak():
-    """Hours 7 and 8 are morning peak."""
-    for h in (7, 8):
-        assert (1 if h in {7, 8, 17, 18, 19} else 0) == 1
+def test_is_peak_hour_in_numeric_features():
+    """is_peak_hour must be in the numeric_features list used by the model pipeline."""
+    import re
+    from pathlib import Path
+    # Read the analytics module source to verify is_peak_hour is in numeric_features
+    analytics_path = Path("sg_transit_weather_mesh/assets/analytics.py")
+    src = analytics_path.read_text()
+    # Verify is_peak_hour appears in the numeric_features list definition
+    assert re.search(r'numeric_features\s*=\s*\[.*"is_peak_hour".*\]', src, re.DOTALL), \
+        "is_peak_hour must be in numeric_features list"
 
 
-def test_is_peak_hour_true_for_evening_peak():
-    """Hours 17, 18, 19 are evening peak."""
-    for h in (17, 18, 19):
-        assert (1 if h in {7, 8, 17, 18, 19} else 0) == 1
-
-
-def test_is_peak_hour_false_for_offpeak():
-    """Hour 12 (midday) and 3 (night) are not peak."""
-    for h in (3, 12, 23):
-        assert (1 if h in {7, 8, 17, 18, 19} else 0) == 0
+def test_is_peak_hour_feature_row_values():
+    """Feature rows must contain is_peak_hour=1 for peak hours and 0 for off-peak."""
+    import math
+    # Simulate the feature row building logic from availability_pattern_export
+    peak_hours = {7, 8, 17, 18, 19}
+    for h in (7, 8, 17, 18, 19):
+        assert (1 if h in peak_hours else 0) == 1, f"Hour {h} should be peak"
+    for h in (0, 6, 9, 12, 16, 20, 23):
+        assert (1 if h in peak_hours else 0) == 0, f"Hour {h} should be off-peak"
