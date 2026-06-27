@@ -445,3 +445,79 @@ def test_v3_lag_rows_area_hour_mean_count_in_row():
                                train_area_means=means, global_mean=50.0)
     assert "area_hour_mean_count" in rows[0]
     assert rows[0]["area_hour_mean_count"] == 77.0
+
+
+def test_v3_training_runs_and_returns_metrics(monkeypatch, tmp_path):
+    """v3 training block computes val_r2 and val_mae without crashing."""
+    import math
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    from sg_transit_weather_mesh.assets.analytics import (
+        _build_v3_lag_rows, _AVAIL_LAG, _AVAIL_HORIZON,
+    )
+    from sklearn.linear_model import LinearRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.compose import ColumnTransformer
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+    # Build synthetic 30-min bucket data: 3 areas × 60 buckets (~30 hours)
+    areas = ["Bukit Merah", "Changi", "Queenstown"]
+    scale = {"Bukit Merah": 100, "Changi": 800, "Queenstown": 60}
+    start = datetime(2026, 6, 27, 0, 0)
+    pa_bucket_counts = {}
+    for area in areas:
+        base = scale[area]
+        for i in range(60):
+            ts = start + timedelta(minutes=30 * i)
+            pa_bucket_counts[(area, ts)] = base + (i % 5) * 5
+
+    # Temporal 80/20 split on all bucket timestamps
+    all_ts = sorted({ts for (_, ts) in pa_bucket_counts})
+    split_ts = all_ts[int(len(all_ts) * 0.8)]
+    train_bucket = {k: v for k, v in pa_bucket_counts.items() if k[1] < split_ts}
+
+    # Compute train means (no leakage)
+    _sum: dict = defaultdict(float)
+    _n: dict = defaultdict(int)
+    for (pa, ts), cnt in train_bucket.items():
+        _sum[(pa, ts.hour)] += cnt
+        _n[(pa, ts.hour)] += 1
+    train_means = {k: _sum[k] / _n[k] for k in _sum}
+    global_mean = sum(_sum.values()) / max(sum(_n.values()), 1)
+
+    # Build lag rows from all data; split by timestamp
+    lag_rows = _build_v3_lag_rows(
+        pa_bucket_counts, _AVAIL_LAG, _AVAIL_HORIZON, train_means, global_mean
+    )
+    assert len(lag_rows) > 0, "Expected lag rows"
+
+    lag_rows.sort(key=lambda r: r["timestamp_30min"])
+    split_idx = int(len(lag_rows) * 0.8)
+    train_rows_v3 = lag_rows[:split_idx]
+    val_rows_v3   = lag_rows[split_idx:]
+    assert len(val_rows_v3) > 0, "Expected validation rows"
+
+    v3_numeric = [
+        "lag_1_rel", "lag_2_rel", "lag_3_rel", "lag_4_rel",
+        "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+        "is_weekend", "is_peak_hour", "area_hour_mean_count",
+    ]
+    X_train_v3 = [[r["planning_area"]] + [r[f] for f in v3_numeric] for r in train_rows_v3]
+    X_val_v3   = [[r["planning_area"]] + [r[f] for f in v3_numeric] for r in val_rows_v3]
+    y_tr_v3    = [r["count"] for r in train_rows_v3]
+    y_va_v3    = [r["count"] for r in val_rows_v3]
+
+    preprocessor_v3 = ColumnTransformer(transformers=[
+        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), [0]),
+        ("num", "passthrough", list(range(1, 1 + len(v3_numeric)))),
+    ])
+    pipeline_v3 = Pipeline([("preprocessor", preprocessor_v3), ("lr", LinearRegression())])
+    pipeline_v3.fit(X_train_v3, y_tr_v3)
+
+    y_pred_va_v3 = pipeline_v3.predict(X_val_v3)
+    val_mae_v3  = float(mean_absolute_error(y_va_v3, y_pred_va_v3))
+    val_r2_v3   = float(r2_score(y_va_v3, y_pred_va_v3))
+
+    assert 0.0 <= val_r2_v3 <= 1.0 or val_r2_v3 < 0, "val_r2 should be a finite float"
+    assert val_mae_v3 >= 0

@@ -1680,6 +1680,126 @@ def availability_pattern_export():
         except Exception as exc:
             _log.warning(f"MLflow logging for availability_pattern_export failed: {exc}", exc_info=True)
 
+    # ── v3: 30-min buckets + area-relative lag features ──────────────────────
+    # Bucket 5-min event_hours into 30-min slots
+    from collections import defaultdict as _dd
+    pa_bucket_counts_v3: dict = _dd(int)
+    pa_bucket_weather_v3: dict = _dd(int)
+    for (pa, event_hour), cnt in pa_hour_counts.items():
+        try:
+            dt = event_hour if isinstance(event_hour, datetime) else datetime.fromisoformat(str(event_hour))
+        except Exception:
+            continue
+        bucket_ts = dt.replace(
+            minute=(dt.minute // 30) * 30, second=0, microsecond=0
+        )
+        key = (pa, bucket_ts)
+        pa_bucket_counts_v3[key] += cnt
+        w_rank = pa_hour_weather.get((pa, event_hour), 0)
+        if w_rank > pa_bucket_weather_v3[key]:
+            pa_bucket_weather_v3[key] = w_rank
+
+    # Temporal split on bucket timestamps (80/20)
+    all_bucket_ts = sorted({ts for (_, ts) in pa_bucket_counts_v3})
+    v3_split_ts   = all_bucket_ts[max(0, int(len(all_bucket_ts) * 0.8) - 1)]
+    train_buckets_v3 = {k: v for k, v in pa_bucket_counts_v3.items() if k[1] <= v3_split_ts}
+
+    # Compute per-(area, hour) mean from training buckets only (no leakage)
+    _v3_sum: dict = defaultdict(float)
+    _v3_n:   dict = defaultdict(int)
+    for (pa, ts), cnt in train_buckets_v3.items():
+        _v3_sum[(pa, ts.hour)] += cnt
+        _v3_n[(pa, ts.hour)]   += 1
+    v3_train_means: dict = {k: _v3_sum[k] / _v3_n[k] for k in _v3_sum}
+    v3_global_mean = sum(_v3_sum.values()) / max(sum(_v3_n.values()), 1)
+
+    # Build lag rows
+    v3_lag_rows = _build_v3_lag_rows(
+        dict(pa_bucket_counts_v3), _AVAIL_LAG, _AVAIL_HORIZON,
+        v3_train_means, v3_global_mean,
+    )
+
+    if len(v3_lag_rows) >= 2:
+        v3_lag_rows.sort(key=lambda r: r["timestamp_30min"])
+        v3_split_idx  = max(1, int(len(v3_lag_rows) * 0.8))
+        v3_train_rows = v3_lag_rows[:v3_split_idx]
+        v3_val_rows   = v3_lag_rows[v3_split_idx:]
+
+        _v3_numeric = [
+            "lag_1_rel", "lag_2_rel", "lag_3_rel", "lag_4_rel",
+            "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+            "is_weekend", "is_peak_hour", "area_hour_mean_count",
+        ]
+        X_train_v3 = [[r["planning_area"]] + [r[f] for f in _v3_numeric] for r in v3_train_rows]
+        X_val_v3   = [[r["planning_area"]] + [r[f] for f in _v3_numeric] for r in v3_val_rows]
+        y_tr_v3    = [r["count"] for r in v3_train_rows]
+        y_va_v3    = [r["count"] for r in v3_val_rows]
+
+        _v3_preprocessor = ColumnTransformer(transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), [0]),
+            ("num", "passthrough", list(range(1, 1 + len(_v3_numeric)))),
+        ])
+        _v3_pipeline = Pipeline([
+            ("preprocessor", _v3_preprocessor),
+            ("lr", LinearRegression()),
+        ])
+        _v3_pipeline.fit(X_train_v3, y_tr_v3)
+        _y_pred_tr_v3 = _v3_pipeline.predict(X_train_v3)
+        _y_pred_va_v3 = _v3_pipeline.predict(X_val_v3)
+
+        v3_train_mae = float(mean_absolute_error(y_tr_v3, _y_pred_tr_v3))
+        v3_val_mae   = float(mean_absolute_error(y_va_v3, _y_pred_va_v3))
+        v3_val_rmse  = float(mean_squared_error(y_va_v3, _y_pred_va_v3) ** 0.5)
+        v3_val_r2    = float(r2_score(y_va_v3, _y_pred_va_v3)) if len(y_va_v3) > 1 else 0.0
+        v3_gap       = v3_val_mae - v3_train_mae
+
+        _log.info(
+            f"v3 metrics — train_mae={v3_train_mae:.1f} val_mae={v3_val_mae:.1f} "
+            f"val_rmse={v3_val_rmse:.1f} val_r2={v3_val_r2:.3f} gap={v3_gap:.1f} "
+            f"n_rows={len(v3_lag_rows)}"
+        )
+
+        # Log to MLflow as a separate lr_v3 run in the same experiment
+        if _mlflow_cfg is not None:
+            try:
+                configure_mlflow_tracking(_mlflow_cfg)
+                mlflow.set_experiment(_mlflow_cfg["experiments"]["availability_pattern"])
+                with mlflow.start_run(run_name=f"lr_v3_{datetime.now().strftime('%Y%m%dT%H%M')}"):
+                    mlflow.log_params({
+                        "feature_version": "v3",
+                        "model_type": "LinearRegression",
+                        "bucket_minutes": 30,
+                        "lag": _AVAIL_LAG,
+                        "horizon": _AVAIL_HORIZON,
+                        "train_split": 0.8,
+                        "features": ",".join(_v3_numeric),
+                    })
+                    mlflow.log_metric("train_mae", v3_train_mae)
+                    mlflow.log_metric("val_mae",   v3_val_mae)
+                    mlflow.log_metric("val_rmse",  v3_val_rmse)
+                    mlflow.log_metric("val_r2",    v3_val_r2)
+                    mlflow.log_metric("train_val_mae_gap", v3_gap)
+                    mlflow.log_metric("n_training_rows",  len(v3_train_rows))
+                    mlflow.log_metric("n_planning_areas", len({r["planning_area"] for r in v3_lag_rows}))
+                    # Per-area val MAE
+                    _v3_area_map: dict = defaultdict(list)
+                    for _i, _r in enumerate(v3_val_rows):
+                        _v3_area_map[_r["planning_area"]].append(_i)
+                    for _pa, _idxs in _v3_area_map.items():
+                        _y_true = [y_va_v3[_i] for _i in _idxs]
+                        _y_pred = [_y_pred_va_v3[_i] for _i in _idxs]
+                        _k = "area_mae_" + _pa.lower().replace(" ", "_")
+                        mlflow.log_metric(_k, float(mean_absolute_error(_y_true, _y_pred)))
+                    mlflow.sklearn.log_model(
+                        sk_model=_v3_pipeline,
+                        artifact_path="model",
+                    )
+            except Exception as _v3_exc:
+                _log.warning(f"MLflow v3 logging failed: {_v3_exc}", exc_info=True)
+    else:
+        _log.info("v3: insufficient lag rows — skipping v3 training")
+    # ── end v3 ───────────────────────────────────────────────────────────────
+
     # Generate predictions per area for now / +30min / +60min / +120min
     now_dt = datetime.now()
     offsets = {"now": timedelta(0), "in_30min": timedelta(minutes=30),
