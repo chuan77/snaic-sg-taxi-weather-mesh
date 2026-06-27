@@ -350,3 +350,98 @@ def test_weather_intensity_moderate_rain_maps_to_two():
 def test_weather_intensity_unknown_condition_defaults_to_zero():
     """An unrecognised forecast string defaults to 0 via the 'clear' fallback."""
     assert INTENSITY_RANK.get(FORECAST_INTENSITY.get("Alien Weather", "clear"), 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# _build_v3_lag_rows tests
+# ---------------------------------------------------------------------------
+from datetime import datetime, timedelta
+import math
+
+
+def _make_bucket_counts(area: str, start: datetime, counts: list) -> dict:
+    """Helper: build pa_bucket_counts dict for one area."""
+    return {
+        (area, start + timedelta(minutes=30 * i)): c
+        for i, c in enumerate(counts)
+    }
+
+
+def test_v3_lag_rows_basic_shape():
+    """_build_v3_lag_rows returns one row per qualifying (area, t) pair."""
+    from sg_transit_weather_mesh.assets.analytics import _build_v3_lag_rows
+    start = datetime(2026, 6, 27, 8, 0)
+    # 10 buckets → LAG=4, HORIZON=4, min=9 → 10 - 4 - 4 = 2 rows
+    counts = [100, 110, 105, 95, 90, 85, 100, 110, 95, 88]
+    pa_bucket_counts = _make_bucket_counts("Bukit Merah", start, counts)
+    means = {("Bukit Merah", (start + timedelta(minutes=30 * i)).hour): 100.0 for i in range(10)}
+    rows = _build_v3_lag_rows(pa_bucket_counts, avail_lag=4, avail_horizon=4,
+                               train_area_means=means, global_mean=100.0)
+    assert len(rows) == 2
+
+
+def test_v3_lag_rows_relative_lag_values():
+    """lag_k_rel = count[t-k] / area_mean."""
+    from sg_transit_weather_mesh.assets.analytics import _build_v3_lag_rows
+    start = datetime(2026, 6, 27, 8, 0)
+    # constant counts of 200 each; area_mean = 100 → all lags = 2.0
+    counts = [200] * 10
+    pa_bucket_counts = _make_bucket_counts("Changi", start, counts)
+    means = {("Changi", (start + timedelta(minutes=30 * i)).hour): 100.0 for i in range(10)}
+    rows = _build_v3_lag_rows(pa_bucket_counts, avail_lag=4, avail_horizon=4,
+                               train_area_means=means, global_mean=100.0)
+    assert rows[0]["lag_1_rel"] == 2.0
+    assert rows[0]["lag_2_rel"] == 2.0
+    assert rows[0]["lag_3_rel"] == 2.0
+    assert rows[0]["lag_4_rel"] == 2.0
+
+
+def test_v3_lag_rows_target_is_horizon_steps_ahead():
+    """count (target) is the value AVAIL_HORIZON steps after the current bucket."""
+    from sg_transit_weather_mesh.assets.analytics import _build_v3_lag_rows
+    start = datetime(2026, 6, 27, 8, 0)
+    # 9 buckets (exactly min), one row: t=4, target=t+4=8 → counts[8]
+    counts = [10, 20, 30, 40, 50, 60, 70, 80, 90]
+    pa_bucket_counts = _make_bucket_counts("Queenstown", start, counts)
+    means = {("Queenstown", (start + timedelta(minutes=30 * i)).hour): 50.0 for i in range(9)}
+    rows = _build_v3_lag_rows(pa_bucket_counts, avail_lag=4, avail_horizon=4,
+                               train_area_means=means, global_mean=50.0)
+    assert len(rows) == 1
+    assert rows[0]["count"] == 90  # counts[8]
+
+
+def test_v3_lag_rows_area_below_min_samples_excluded():
+    """Areas with fewer than LAG+HORIZON+1 buckets produce zero rows."""
+    from sg_transit_weather_mesh.assets.analytics import _build_v3_lag_rows
+    start = datetime(2026, 6, 27, 8, 0)
+    counts = [10, 20, 30, 40, 50, 60, 70, 80]  # 8 buckets < 9 min
+    pa_bucket_counts = _make_bucket_counts("Tengah", start, counts)
+    means = {("Tengah", (start + timedelta(minutes=30 * i)).hour): 40.0 for i in range(8)}
+    rows = _build_v3_lag_rows(pa_bucket_counts, avail_lag=4, avail_horizon=4,
+                               train_area_means=means, global_mean=40.0)
+    assert len(rows) == 0
+
+
+def test_v3_lag_rows_uses_global_mean_fallback():
+    """Uses global_mean when area+hour key is absent from train_area_means."""
+    from sg_transit_weather_mesh.assets.analytics import _build_v3_lag_rows
+    start = datetime(2026, 6, 27, 8, 0)
+    counts = [50] * 10
+    pa_bucket_counts = _make_bucket_counts("Lim Chu Kang", start, counts)
+    # No means provided for this area → falls back to global_mean=25
+    rows = _build_v3_lag_rows(pa_bucket_counts, avail_lag=4, avail_horizon=4,
+                               train_area_means={}, global_mean=25.0)
+    assert rows[0]["lag_1_rel"] == 50.0 / 25.0
+
+
+def test_v3_lag_rows_area_hour_mean_count_in_row():
+    """area_hour_mean_count is present in each returned row."""
+    from sg_transit_weather_mesh.assets.analytics import _build_v3_lag_rows
+    start = datetime(2026, 6, 27, 8, 0)
+    counts = [100] * 10
+    pa_bucket_counts = _make_bucket_counts("Bukit Timah", start, counts)
+    means = {("Bukit Timah", (start + timedelta(minutes=30 * i)).hour): 77.0 for i in range(10)}
+    rows = _build_v3_lag_rows(pa_bucket_counts, avail_lag=4, avail_horizon=4,
+                               train_area_means=means, global_mean=50.0)
+    assert "area_hour_mean_count" in rows[0]
+    assert rows[0]["area_hour_mean_count"] == 77.0

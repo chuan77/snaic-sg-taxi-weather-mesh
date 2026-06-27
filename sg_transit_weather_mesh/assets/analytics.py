@@ -9,7 +9,7 @@ from shapely.strtree import STRtree
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_score, mean_absolute_error, mean_squared_error, r2_score
 from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -1390,6 +1390,63 @@ def demand_forecast_export():
     )
 
 
+_AVAIL_LAG     = 4   # 2 hours of history at 30-min granularity
+_AVAIL_HORIZON = 4   # predict 2 hours ahead (4 × 30 min)
+
+
+def _build_v3_lag_rows(
+    pa_bucket_counts: dict,
+    avail_lag: int,
+    avail_horizon: int,
+    train_area_means: dict,
+    global_mean: float,
+) -> list:
+    """Build lag-feature rows from 30-min bucketed taxi counts.
+
+    For each planning area, sorts buckets chronologically and emits one row
+    per qualifying timestep (index avail_lag .. len-avail_horizon-1).
+    Each row contains area-relative lag features (count / area_mean) and
+    the raw count avail_horizon steps ahead as the target.
+    """
+    from collections import defaultdict
+    # Group by planning area
+    area_buckets: dict = defaultdict(list)
+    for (pa, ts), cnt in pa_bucket_counts.items():
+        area_buckets[pa].append((ts, cnt))
+
+    min_samples = avail_lag + avail_horizon + 1
+    result = []
+    for pa, ts_cnt_list in area_buckets.items():
+        ts_cnt_list.sort(key=lambda x: x[0])
+        if len(ts_cnt_list) < min_samples:
+            continue
+        timestamps = [x[0] for x in ts_cnt_list]
+        counts_seq = [x[1] for x in ts_cnt_list]
+        for i in range(avail_lag, len(counts_seq) - avail_horizon):
+            dt = timestamps[i]
+            h   = dt.hour
+            dow = dt.weekday()
+            area_mean = train_area_means.get((pa, h), global_mean) or global_mean
+            lags_rel = {
+                f"lag_{k}_rel": counts_seq[i - k] / area_mean
+                for k in range(1, avail_lag + 1)
+            }
+            result.append({
+                "planning_area": pa,
+                "timestamp_30min": dt,
+                "hour_sin":  math.sin(2 * math.pi * h / 24),
+                "hour_cos":  math.cos(2 * math.pi * h / 24),
+                "dow_sin":   math.sin(2 * math.pi * dow / 7),
+                "dow_cos":   math.cos(2 * math.pi * dow / 7),
+                "is_weekend":   1 if dow >= 5 else 0,
+                "is_peak_hour": 1 if h in {7, 8, 17, 18, 19} else 0,
+                "area_hour_mean_count": area_mean,
+                **lags_rel,
+                "count": counts_seq[i + avail_horizon],
+            })
+    return result
+
+
 @asset(
     compute_kind="python",
 )
@@ -1518,7 +1575,23 @@ def availability_pattern_export():
     train_rows = feature_rows[:split_idx]
     val_rows   = feature_rows[split_idx:]
 
-    numeric_features = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend", "is_peak_hour", "weather_intensity"]
+    # Compute per-(area, hour) mean from training rows only — no leakage
+    _area_hour_sum: dict[tuple, float] = defaultdict(float)
+    _area_hour_n: dict[tuple, int] = defaultdict(int)
+    for r in train_rows:
+        key = (r["planning_area"], r["event_hour"].hour)
+        _area_hour_sum[key] += r["count"]
+        _area_hour_n[key] += 1
+    area_hour_mean: dict[tuple, float] = {
+        k: _area_hour_sum[k] / _area_hour_n[k] for k in _area_hour_sum
+    }
+    _global_mean = sum(_area_hour_sum.values()) / max(sum(_area_hour_n.values()), 1)
+    for r in feature_rows:
+        r["area_hour_mean_count"] = area_hour_mean.get(
+            (r["planning_area"], r["event_hour"].hour), _global_mean
+        )
+
+    numeric_features = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_weekend", "is_peak_hour", "weather_intensity", "area_hour_mean_count"]
     categorical_features = ["planning_area"]
 
     def _to_X_y(rows_list):
@@ -1541,7 +1614,7 @@ def availability_pattern_export():
 
     pipeline = Pipeline([
         ("preprocessor", preprocessor),
-        ("ridge", Ridge(alpha=1.0)),
+        ("lr", LinearRegression()),
     ])
 
     pipeline.fit(X_train_full, y_tr)
@@ -1572,8 +1645,14 @@ def availability_pattern_export():
         try:
             configure_mlflow_tracking(_mlflow_cfg)
             mlflow.set_experiment(_mlflow_cfg["experiments"]["availability_pattern"])
-            with mlflow.start_run(run_name=f"ridge_{datetime.now().strftime('%Y%m%dT%H%M')}"):
-                mlflow.log_params({"alpha": 1.0, "train_split": 0.8, "features": ",".join(numeric_features)})
+            with mlflow.start_run(run_name=f"lr_{datetime.now().strftime('%Y%m%dT%H%M')}"):
+                mlflow.log_params({
+                    "train_split": 0.8,
+                    "features": ",".join(numeric_features),
+                    "feature_version": "v2",
+                    "model_type": "LinearRegression",
+                    "lag_feature": "area_hour_mean_count",
+                })
                 mlflow.log_metric("train_mae", train_mae)
                 mlflow.log_metric("val_mae", val_mae)
                 mlflow.log_metric("val_rmse", val_rmse)
@@ -1613,6 +1692,7 @@ def availability_pattern_export():
             target_dt = now_dt + delta
             h = target_dt.hour
             dow = target_dt.weekday()
+            mean_count = area_hour_mean.get((pa, h), _global_mean)
             feat = [
                 [pa,
                  math.sin(2 * math.pi * h / 24),
@@ -1621,7 +1701,8 @@ def availability_pattern_export():
                  math.cos(2 * math.pi * dow / 7),
                  1 if dow >= 5 else 0,
                  1 if h in {7, 8, 17, 18, 19} else 0,
-                 current_weather_intensity]
+                 current_weather_intensity,
+                 mean_count]
             ]
             pred_val = max(0, int(round(float(pipeline.predict(feat)[0]))))
             pred_row[label] = pred_val
@@ -1633,6 +1714,7 @@ def availability_pattern_export():
         hourly_preds = []
         for h in range(24):
             dow = now_dt.weekday()
+            mean_count = area_hour_mean.get((pa, h), _global_mean)
             feat = [
                 [pa,
                  math.sin(2 * math.pi * h / 24),
@@ -1641,7 +1723,8 @@ def availability_pattern_export():
                  math.cos(2 * math.pi * dow / 7),
                  1 if dow >= 5 else 0,
                  1 if h in {7, 8, 17, 18, 19} else 0,
-                 current_weather_intensity]
+                 current_weather_intensity,
+                 mean_count]
             ]
             hourly_preds.append(max(0, float(pipeline.predict(feat)[0])))
         daily_peak = max(hourly_preds) if hourly_preds else 1.0
