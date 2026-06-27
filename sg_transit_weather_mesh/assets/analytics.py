@@ -1682,9 +1682,7 @@ def availability_pattern_export():
 
     # ── v3: 30-min buckets + area-relative lag features ──────────────────────
     # Bucket 5-min event_hours into 30-min slots
-    from collections import defaultdict as _dd
-    pa_bucket_counts_v3: dict = _dd(int)
-    pa_bucket_weather_v3: dict = _dd(int)
+    pa_bucket_counts_v3: dict = defaultdict(int)
     for (pa, event_hour), cnt in pa_hour_counts.items():
         try:
             dt = event_hour if isinstance(event_hour, datetime) else datetime.fromisoformat(str(event_hour))
@@ -1695,14 +1693,11 @@ def availability_pattern_export():
         )
         key = (pa, bucket_ts)
         pa_bucket_counts_v3[key] += cnt
-        w_rank = pa_hour_weather.get((pa, event_hour), 0)
-        if w_rank > pa_bucket_weather_v3[key]:
-            pa_bucket_weather_v3[key] = w_rank
 
     # Temporal split on bucket timestamps (80/20)
     all_bucket_ts = sorted({ts for (_, ts) in pa_bucket_counts_v3})
-    v3_split_ts   = all_bucket_ts[max(0, int(len(all_bucket_ts) * 0.8) - 1)]
-    train_buckets_v3 = {k: v for k, v in pa_bucket_counts_v3.items() if k[1] <= v3_split_ts}
+    v3_split_ts   = all_bucket_ts[max(0, int(len(all_bucket_ts) * 0.8))]
+    train_buckets_v3 = {k: v for k, v in pa_bucket_counts_v3.items() if k[1] < v3_split_ts}
 
     # Compute per-(area, hour) mean from training buckets only (no leakage)
     _v3_sum: dict = defaultdict(float)
